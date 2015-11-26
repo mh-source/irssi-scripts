@@ -20,7 +20,7 @@
 #
 ##############################################################################
 #
-# Print /NAMES on all channels every X (default 30) minutes (for logging)
+# print /NAMES on all channels every X (default 30) minutes (for logging)
 #
 # irssi is set by default with "log_level = all -crap -clientcrap -ctcps" to
 # get /NAMES to show up in your log file you need to remove "-clientcrap".
@@ -60,7 +60,7 @@ our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_lognames',
-	'description' => 'Print /NAMES on all channels every X (default 30) minutes (for logging)',
+	'description' => 'print /NAMES on all channels every X (default 30) minutes (for logging)',
 	'license'     => 'BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
