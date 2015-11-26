@@ -43,7 +43,7 @@
 # if irssi isnt configured to autoconnect to a network, you want "-c <network>"
 CONFIG_IRSSI_ARGS=""
 
-# how often cron checks if irssi should be started, every X minute  (1-59)
+# how often cron checks if irssi should be started, every X minutes  (1-59)
 CONFIG_CRON_CHECK="10"
 
 # you probably dont need to change the following
