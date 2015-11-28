@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_lognames.pl v1.01 (20151121)
+# mh_lognames.pl v1.02 (20151128)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -36,6 +36,8 @@
 # /NAMES every 30 minutes.
 #
 # history:
+#	v1.02 (20151128)
+#		changed url
 #	v1.01 (20151121)
 #		changed url to github and added basic instructions
 #	v1.00 (20151121)
@@ -56,7 +58,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_lognames',
@@ -64,7 +66,7 @@ our %IRSSI   =
 	'license'     => 'BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
-	'url'         => 'https://github.com/mh-source/mh_lognames.pl',
+	'url'         => 'https://github.com/mh-source/irssi-scripts',
 );
 
 ##############################################################################
