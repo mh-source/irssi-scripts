@@ -409,8 +409,8 @@ Irssi::theme_register([
   'mh_userstatus_whoa_oper_host', '{channick_hilight $0} {chanhost_hilight $1} is {hilight oper}',
 ]);
 
-Irssi::settings_add_int('mh_userstatus',  'mh_userstatus_delay',     1);
-Irssi::settings_add_int('mh_userstatus',  'mh_userstatus_lag_limit', 100);
+Irssi::settings_add_int('mh_userstatus',  'mh_userstatus_delay',     5);
+Irssi::settings_add_int('mh_userstatus',  'mh_userstatus_lag_limit', 5);
 Irssi::settings_add_bool('mh_userstatus', 'mh_userstatus_show_host', 1);
 
 for my $channel (Irssi::channels())
