@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.01 (20151201)
+# mh_hilog.pl v1.02 (20151201)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -25,9 +25,18 @@
 # there is also a statusbar item that will show [hilog: <count>] when
 # the count is more than 0
 #
+# lines will be printed in the following format (subject to configuration):
+# DD/MM HH:MM [<refnum>]{<Network>/<channel>} <text...>
+#
 # settings:
 #
-# mh_hilog_prefix (default hilog:): set on unset the text prefix
+# mh_hilog_show_refnum (default ON): enable/disable showing the hilight
+# window refnum part
+#
+# mh_hilog_show_network (default ON): enable/disable showing the hilight
+# window network part
+#
+# mh_hilog_prefix (default 'hilog: '): set on unset the text prefix
 # in the statusbar item
 #
 # to configure irssi to show the new statusbar item in a default irssi
@@ -35,6 +44,10 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.02 (20151201)
+#		added /help
+#		added mh_hilog_show_refnum/mh_hilog_show_network and supporting code
+#		will now print if the log is empty when doing /hilog
 #	v1.01 (20151201)
 #		added setting mh_hilog_prefix
 #	v1.00 (20151130)
@@ -54,7 +67,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -75,6 +88,29 @@ our @hilog;
 
 ##############################################################################
 #
+# common support functions
+#
+##############################################################################
+
+sub trim_space
+{
+   my ($string) = @_;
+
+   if (defined($string))
+   {
+      $string =~ s/^\s+//g;
+      $string =~ s/\s+$//g;
+
+   } else {
+
+      $string = '';
+   }
+
+   return($string);
+}
+
+##############################################################################
+#
 # irssi signal handlers
 #
 ##############################################################################
@@ -92,7 +128,21 @@ sub signal_print_text
 		$mday = sprintf("%02d", $mday);
 		$mon  = sprintf("%02d", $mon);
 
-		push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' {' . $textdest->{'target'} . '} ' . $text);
+		my $refnum = '';
+
+		if (Irssi::settings_get_bool('mh_hilog_show_refnum'))
+		{
+			$refnum = '[' . $textdest->{'window'}->{'refnum'} . ']';
+		}
+
+		my $servertag = '';
+
+		if (Irssi::settings_get_bool('mh_hilog_show_network') and $textdest->{'server'})
+		{
+			$servertag = $textdest->{'server'}->{'tag'} . '/';
+		}
+
+		push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' ' . $refnum . '{' . $servertag  . $textdest->{'target'} . '} ' . $text);
 		Irssi::statusbar_items_redraw('mh_sbhilog');
 	}
 }
@@ -117,8 +167,33 @@ sub command_hilog
 		Irssi::active_win->print($data, Irssi::MSGLEVEL_NEVER);
 	}
 
+	if (not @hilog)
+	{
+		Irssi::active_win->print('Hilight log is empty', Irssi::MSGLEVEL_CRAP);
+	}
+
 	@hilog = ();
 	Irssi::statusbar_items_redraw('mh_sbhilog');
+}
+
+sub command_help
+{
+	my ($data, $server, $windowitem) = @_;
+
+	$data = lc(trim_space($data));
+
+	if ($data =~ m/^hilog$/i)
+	{
+		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('HILOG', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('shows the current hilight log and clears the counter.', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('See also: DEHILIGHT, HILIGHT, SET HILIGHT, SET ' . uc('mh_hilog'), Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
+
+		Irssi::signal_stop();
+	}
 }
 
 ##############################################################################
@@ -148,14 +223,18 @@ sub statusbar_hilog
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_hilog', 'mh_hilog_prefix', 'hilog:');
+Irssi::settings_add_str('mh_hilog',  'mh_hilog_prefix',       'hilog: ');
+Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_network', 1);
+Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_refnum',  1);
 
 Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
 
 Irssi::signal_add('print text',         'signal_print_text');
 Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
 
+
 Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
+Irssi::command_bind('help',  'command_help');
 
 1;
 
