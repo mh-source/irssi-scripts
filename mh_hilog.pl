@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.00 (20151130)
+# mh_hilog.pl v1.01 (20151201)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -25,11 +25,18 @@
 # there is also a statusbar item that will show [hilog: <count>] when
 # the count is more than 0
 #
+# settings:
+#
+# mh_hilog_prefix (default hilog:): set on unset the text prefix
+# in the statusbar item
+#
 # to configure irssi to show the new statusbar item in a default irssi
 # installation type '/statusbar window add -after window_empty mh_sbhilog'.
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.01 (20151201)
+#		added setting mh_hilog_prefix
 #	v1.00 (20151130)
 #		initial release
 #
@@ -47,7 +54,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -90,6 +97,11 @@ sub signal_print_text
 	}
 }
 
+sub signal_setup_changed_last
+{
+	Irssi::statusbar_items_redraw('mh_sbhilog');
+}
+
 ##############################################################################
 #
 # irssi command functions
@@ -124,7 +136,7 @@ sub statusbar_hilog
 
 	if ($count)
 	{
-		$format = 'hilog: ' . $count;
+		$format = Irssi::settings_get_str('mh_hilog_prefix') . $count;
 	}
 
 	$statusbaritem->default_handler($get_size_only, '{sb ' . $format . '}', '', 0);
@@ -136,9 +148,12 @@ sub statusbar_hilog
 #
 ##############################################################################
 
-Irssi::signal_add('print text', 'signal_print_text');
+Irssi::settings_add_str('mh_hilog', 'mh_hilog_prefix', 'hilog:');
 
 Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
+
+Irssi::signal_add('print text',         'signal_print_text');
+Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
 
 Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
 
