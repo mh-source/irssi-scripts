@@ -115,7 +115,6 @@ our $more        = 0;
 #
 ##############################################################################
 
-#¤include common/template.fpp.pl
 sub trim_space
 {
    my ($string) = @_;
@@ -256,14 +255,6 @@ sub statusbar_more_redraw
 
 ##############################################################################
 #
-# irssi timeouts
-#
-##############################################################################
-
-#¤include timeout/template.fpp.pl
-
-##############################################################################
-#
 # irssi signal handlers
 #
 ##############################################################################
@@ -336,8 +327,6 @@ sub signal_print_text_last
 		window_refresh();
 	}
 }
-
-#Irssi::signal_add('print text', 'signal_print_text_last');
 
 ##############################################################################
 #
@@ -476,7 +465,6 @@ Irssi::signal_add_last('window changed',   'signal_window_changed_last');
 Irssi::signal_add_last('print text',       'signal_print_text_last');
 
 Irssi::command_bind('hold_mode', 'command_hold_mode', 'mh_hold_mode');
-
 
 1;
 
