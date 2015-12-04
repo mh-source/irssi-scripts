@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.02 (20151201)
+# mh_hilog.pl v1.03 (20151204)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -39,11 +39,16 @@
 # mh_hilog_prefix (default 'hilog: '): set on unset the text prefix
 # in the statusbar item
 #
+# mh_hilog_ignore (default ''): comma-seperated list of "<network>/<channel>"
+# to ignore when logging hilights.
+#
 # to configure irssi to show the new statusbar item in a default irssi
 # installation type '/statusbar window add -after window_empty mh_sbhilog'.
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.03 (20151204)
+#		added _ignore and supporting code
 #	v1.02 (20151201)
 #		added /help
 #		added mh_hilog_show_refnum/mh_hilog_show_network and supporting code
@@ -67,7 +72,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -142,8 +147,25 @@ sub signal_print_text
 			$servertag = $textdest->{'server'}->{'tag'} . '/';
 		}
 
-		push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' ' . $refnum . '{' . $servertag  . $textdest->{'target'} . '} ' . $text);
-		Irssi::statusbar_items_redraw('mh_sbhilog');
+		my $ignore = 0;
+		my $server_target = lc($textdest->{'server'}->{'tag'} . '/' . $textdest->{'target'});
+
+		for my $server_target_ignore (split(',', Irssi::settings_get_str('mh_hilog_ignore')))
+		{
+			$server_target_ignore = lc($server_target_ignore);
+
+			if ($server_target_ignore eq $server_target)
+			{
+				$ignore = 1;
+				last;
+			}
+		}
+
+		if (not $ignore)
+		{
+			push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' ' . $refnum . '{' . $servertag  . $textdest->{'target'} . '} ' . $text);
+			Irssi::statusbar_items_redraw('mh_sbhilog');
+		}
 	}
 }
 
@@ -187,7 +209,7 @@ sub command_help
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('HILOG', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
-		Irssi::print('shows the current hilight log and clears the counter.', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('Shows the current hilight log and clears the counter.', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('See also: DEHILIGHT, HILIGHT, SET HILIGHT, SET ' . uc('mh_hilog'), Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
@@ -226,12 +248,12 @@ sub statusbar_hilog
 Irssi::settings_add_str('mh_hilog',  'mh_hilog_prefix',       'hilog: ');
 Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_network', 1);
 Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_refnum',  1);
+Irssi::settings_add_str('mh_hilog',  'mh_hilog_ignore',       '');
 
 Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
 
 Irssi::signal_add('print text',         'signal_print_text');
 Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
-
 
 Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
 Irssi::command_bind('help',  'command_help');
