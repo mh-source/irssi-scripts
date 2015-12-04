@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hold_mode.pl v1.00 (20151201)
+# mh_hold_mode.pl v1.01 (20151204)
 #
 # Copyright (c) 2007, 2015  Michael Hansen
 #
@@ -24,7 +24,7 @@
 #
 # Instructions:
 #
-# Add the mh_sbmore statusbar-item with '/STATUSBAR WINDOW ADD mh_sbmore'
+# Add the mh_sbmore statusbar-item with '/statusbar window add -after window_empty mh_sbmore'
 # (For better control of the placement of mh_sbmore see '/HELP STATUSBAR'
 #
 # mh_sbmore *should* fully replace Irssi's standard more, so you could
@@ -58,6 +58,8 @@
 # (I hope i didn't forget anything :-)
 #
 # history:
+#	v1.01 (20151204)
+#		nicer (imho) mh_sbmore
 #	v1.00 (20151201)
 #		cleanup and re-release, this have been in active use since 2007 without any issues
 #	v0.12 (unknown 2007)
@@ -71,8 +73,6 @@
 use v5.14.2;
 
 use strict;
-use warnings;
-use Data::Dumper;
 
 ##############################################################################
 #
@@ -83,7 +83,7 @@ use Data::Dumper;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_hold_mode',
@@ -103,8 +103,8 @@ our %IRSSI   =
 our $KEYCODE_ENTER = 10;
 
 our %config;
-$config{'DEFAULT'}{'hold_mode'}     = 0;  # Default: 0
-$config{'DEFAULT'}{'scroll_always'} = 0; # Default: 1
+$config{'DEFAULT'}{'hold_mode'}     = 0; # default: 0
+$config{'DEFAULT'}{'scroll_always'} = 0; # default: 1
 
 our $lastcommand = '';
 our $more        = 0;
@@ -425,11 +425,11 @@ sub statusbar_more
 
 	if ($more)
 	{
-		$statusbaritem->default_handler($get_size_only, "-- $more more --", '', 0);
+		$statusbaritem->default_handler($get_size_only, "{sb $more more}", '', 0);
 
 	} else {
 
-		$statusbaritem->default_handler($get_size_only, ' ', '', 0);
+		$statusbaritem->default_handler($get_size_only, '', '', 0);
 	}
 }
 
@@ -451,7 +451,7 @@ for my $window (Irssi::windows)
 	config_window_get($window);
 }
 
-Irssi::statusbar_item_register('mh_hold_mode', "{sb $0-}", 'statusbar_more');
+Irssi::statusbar_item_register('mh_sbmore', '', 'statusbar_more');
 Irssi::statusbars_recreate_items();
 
 statusbar_more_redraw();
