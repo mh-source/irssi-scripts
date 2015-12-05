@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.03 (20151204)
+# mh_hilog.pl v1.04 (20151205)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -47,6 +47,8 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.04 (20151205)
+#		month in timestamps were off by one, fixed
 #	v1.03 (20151204)
 #		added _ignore and supporting code
 #	v1.02 (20151201)
@@ -72,7 +74,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -131,7 +133,7 @@ sub signal_print_text
 		$min  = sprintf("%02d", $min);
 		$hour = sprintf("%02d", $hour);
 		$mday = sprintf("%02d", $mday);
-		$mon  = sprintf("%02d", $mon);
+		$mon  = sprintf("%02d", ($mon + 1));
 
 		my $refnum = '';
 
