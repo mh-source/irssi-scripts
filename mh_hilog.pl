@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.04 (20151205)
+# mh_hilog.pl v1.05 (20151209)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -47,6 +47,8 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.05 (20151209)
+#		now saving the hilog to a file, so they are still there after a restart
 #	v1.04 (20151205)
 #		month in timestamps were off by one, fixed
 #	v1.03 (20151204)
@@ -64,6 +66,7 @@
 use v5.14.2;
 
 use strict;
+use File::Path qw(make_path remove_tree);
 
 ##############################################################################
 #
@@ -74,7 +77,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -92,6 +95,8 @@ our %IRSSI   =
 ##############################################################################
 
 our @hilog;
+our $hilog_count = 0;
+our $hilog_save_timeout;
 
 ##############################################################################
 #
@@ -114,6 +119,72 @@ sub trim_space
    }
 
    return($string);
+}
+
+##############################################################################
+#
+# script functions
+#
+##############################################################################
+
+sub hilog_scan
+{
+	my $filepath = Irssi::get_irssi_dir();
+	my $filename = $filepath . '/mh_hilog.log';
+
+	if (open(my $filehandle, '<:encoding(UTF-8)' , $filename))
+	{
+		while (my $data = <$filehandle>)
+		{
+			$hilog_count++;
+		}
+
+		close($filehandle);
+	}
+
+	Irssi::statusbar_items_redraw('mh_sbhilog');
+}
+sub hilog_load
+{
+	my $filepath = Irssi::get_irssi_dir();
+	my $filename = $filepath . '/mh_hilog.log';
+
+	if (open(my $filehandle, '<:encoding(UTF-8)' , $filename))
+	{
+		while (my $data = <$filehandle>)
+		{
+			chomp($data);
+			push(@hilog, $data);
+		}
+
+		close($filehandle);
+		unlink($filename);
+	}
+
+	Irssi::statusbar_items_redraw('mh_sbhilog');
+}
+sub hilog_save
+{
+	$hilog_save_timeout = 0;
+
+	my $filepath = Irssi::get_irssi_dir();
+
+	make_path($filepath);
+
+	my $filename = $filepath . '/mh_hilog.log';
+
+	if (open(my $filehandle, '>>:encoding(UTF-8)' , $filename))
+	{
+		for my $logentry (@hilog)
+		{
+			print($filehandle $logentry . "\n");
+		}
+
+		close($filehandle);
+		@hilog = ();
+	}
+
+	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
 
 ##############################################################################
@@ -166,7 +237,13 @@ sub signal_print_text
 		if (not $ignore)
 		{
 			push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' ' . $refnum . '{' . $servertag  . $textdest->{'target'} . '} ' . $text);
+			$hilog_count++;
 			Irssi::statusbar_items_redraw('mh_sbhilog');
+			if ($hilog_save_timeout)
+			{
+				Irssi::timeout_remove($hilog_save_timeout);
+			}
+			$hilog_save_timeout = Irssi::timeout_add_once(60000, 'hilog_save', undef); # one minute grace-period
 		}
 	}
 }
@@ -174,6 +251,17 @@ sub signal_print_text
 sub signal_setup_changed_last
 {
 	Irssi::statusbar_items_redraw('mh_sbhilog');
+}
+
+sub signal_gui_exit_last
+{
+	if ($hilog_save_timeout)
+	{
+		Irssi::timeout_remove($hilog_save_timeout);
+		$hilog_save_timeout = 0;
+	}
+
+	hilog_save();
 }
 
 ##############################################################################
@@ -186,6 +274,8 @@ sub command_hilog
 {
 	my ($data, $server, $windowitem) = @_;
 
+	hilog_load();
+
 	for my $data (@hilog)
 	{
 		Irssi::active_win->print($data, Irssi::MSGLEVEL_NEVER);
@@ -196,7 +286,8 @@ sub command_hilog
 		Irssi::active_win->print('Hilight log is empty', Irssi::MSGLEVEL_CRAP);
 	}
 
-	@hilog = ();
+	@hilog       = ();
+	$hilog_count = 0;
 	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
 
@@ -230,12 +321,11 @@ sub statusbar_hilog
 {
 	my ($statusbaritem, $get_size_only) = @_;
 
-	my $count  = scalar(@hilog);
 	my $format = '';
 
-	if ($count)
+	if ($hilog_count)
 	{
-		$format = Irssi::settings_get_str('mh_hilog_prefix') . $count;
+		$format = Irssi::settings_get_str('mh_hilog_prefix') . $hilog_count;
 	}
 
 	$statusbaritem->default_handler($get_size_only, '{sb ' . $format . '}', '', 0);
@@ -256,9 +346,12 @@ Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
 
 Irssi::signal_add('print text',         'signal_print_text');
 Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
+Irssi::signal_add_last('gui exit',      'signal_gui_exit_last');
 
 Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
 Irssi::command_bind('help',  'command_help');
+
+hilog_scan();
 
 1;
 
