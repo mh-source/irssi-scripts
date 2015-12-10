@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hold_mode.pl v1.01 (20151204)
+# mh_hold_mode.pl v1.02 (20151210)
 #
 # Copyright (c) 2007, 2015  Michael Hansen
 #
@@ -22,42 +22,55 @@
 #
 # Emulation of ircII per-window hold_mode
 #
-# Instructions:
+# known issues:
 #
-# Add the mh_sbmore statusbar-item with '/statusbar window add -after window_empty mh_sbmore'
+# in the github version of irssi this script will not accept the
+# keypad enter key
+#
+# upgrading from v0.xx to v1.xx:
+#
+# the statusbar item have changed name from mh_more to mh_sbmore, you
+# can remove the old item with '/statusbar window remove mh_more' and
+# follow the instructions below to add the new item
+#
+# instructions:
+#
+# add the mh_sbmore statusbar item with '/statusbar window add -after window_empty mh_sbmore'
 # (For better control of the placement of mh_sbmore see '/HELP STATUSBAR'
 #
 # mh_sbmore *should* fully replace Irssi's standard more, so you could
-# remove it with '/STATUSBAR WINDOW REMOVE more'.
+# remove it with '/STATUSBAR WINDOW REMOVE more'
 #
-# When the script is loaded it will reset all windows and scroll them
+# when the script is loaded it will reset all windows and scroll them
 # to the last line (without losing backlog) and from then on you will
 # have to do '/HOLD_MODE ON' or '/HOLD_MODE OFF' in a given window to
-# enable/disable hold_mode for it (off by default).
+# enable/disable hold_mode for it (off by default)
 #
-# Should the buffer become too much for you to bother to read it, you
+# should the buffer become too much for you to bother to read it, you
 # can jump to the bottom with '/HOLD_MODE FLUSH' (although '/CLEAR'
-# will do the same).
+# will do the same)
 #
-# When hold_mode is on, it will scroll untill the last line you said or
+# when hold_mode is on, it will scroll untill the last line you said or
 # command you send, then hold untill you press enter (and depending on
 # the 'scroll_always' value it will either scroll on any enter, or only on
 # enter with empty commandline). enter will scroll by 1 page (minus 1 line)
 # unless you have moved around in the scrollback buffer with pg-up/dn, in
 # which case it will scroll to where you left (except when you pg-dn to
-# end of buffer, this will reset the scroll stop point to that line).
+# end of buffer, this will reset the scroll stop point to that line)
 #
 # (also, you can reset the point to scroll to at any time by just
 # pressing enter when in "live" view, the current line will then be set
 # as the scroll stop point)
 #
-# It is not a true-to-ircII hold_mode emulation, as some things are slightly
+# it is not a true-to-ircII hold_mode emulation, as some things are slightly
 # different, over time they might be made optional to be able to go back
 # to as close to ircII as possible.
 #
-# (I hope i didn't forget anything :-)
+# (i hope i didn't forget anything :-)
 #
 # history:
+#	v1.02 (20151210)
+#		now accepts both 10 and 13 as keycode for enter, required to work in upcomming irssi
 #	v1.01 (20151204)
 #		nicer (imho) mh_sbmore
 #	v1.00 (20151201)
@@ -83,7 +96,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_hold_mode',
@@ -100,7 +113,8 @@ our %IRSSI   =
 #
 ##############################################################################
 
-our $KEYCODE_ENTER = 10;
+our $KEYCODE_ENTER1 = 10;
+our $KEYCODE_ENTER2 = 13;
 
 our %config;
 $config{'DEFAULT'}{'hold_mode'}     = 0; # default: 0
@@ -263,7 +277,7 @@ sub signal_gui_key_pressed_first
 {
 	my ($keycode) = @_;
 
-	if ($keycode == $KEYCODE_ENTER)
+	if (($keycode == $KEYCODE_ENTER1) or ($keycode == $KEYCODE_ENTER2))
 	{
 		$lastcommand  = Irssi::parse_special('$L');
 		my $windowrec = Irssi::active_win();
@@ -279,7 +293,7 @@ sub signal_gui_key_pressed_last
 {
 	my ($keycode) = @_;
 
-	if ($keycode == $KEYCODE_ENTER)
+	if (($keycode == $KEYCODE_ENTER1) or ($keycode == $KEYCODE_ENTER2))
 	{
 		my $windowrec = Irssi::active_win();
 
@@ -352,9 +366,8 @@ sub command_hold_mode
 			if ($data =~ m/^toggle$/i)
 			{
 				$data = (($window->{'hold_mode'}) ? 'off' : 'on' );
-			}
 
-			if ($data =~ m/^on$/i)
+			} elsif ($data =~ m/^on$/i)
 			{
 				$window->{'hold_mode'} = 1;
 				$windowrec->view()->set_bookmark_bottom('mh_hold_mode');
