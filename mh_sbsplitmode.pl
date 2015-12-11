@@ -52,7 +52,7 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
-#	v1.03 (20151210)
+#	v1.04 (20151210)
 #		added setting _show_details_trend and supporting code
 #		fixed warning about experimental feature (keys($var)) in perl v5.20.2
 #	v1.03 (20151208)
