@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.05 (20151209)
+# mh_hilog.pl v1.06 (20151212)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -47,6 +47,8 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.06 (20151212)
+#		added indents to /help
 #	v1.05 (20151209)
 #		now saving the hilog to a file, so they are still there after a restart
 #	v1.04 (20151205)
@@ -77,7 +79,7 @@ use File::Path qw(make_path remove_tree);
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.05';
+our $VERSION = '1.06';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -144,6 +146,7 @@ sub hilog_scan
 
 	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
+
 sub hilog_load
 {
 	my $filepath = Irssi::get_irssi_dir();
@@ -163,6 +166,7 @@ sub hilog_load
 
 	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
+
 sub hilog_save
 {
 	$hilog_save_timeout = 0;
@@ -302,9 +306,9 @@ sub command_help
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('HILOG', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
-		Irssi::print('Shows the current hilight log and clears the counter.', Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('%|Shows the current hilight log and clears the counter.', Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
-		Irssi::print('See also: DEHILIGHT, HILIGHT, SET HILIGHT, SET ' . uc('mh_hilog'), Irssi::MSGLEVEL_CLIENTCRAP);
+		Irssi::print('See also: %|DEHILIGHT, HILIGHT, SET HILIGHT, SET ' . uc('mh_hilog'), Irssi::MSGLEVEL_CLIENTCRAP);
 		Irssi::print('', Irssi::MSGLEVEL_CLIENTCRAP);
 
 		Irssi::signal_stop();
