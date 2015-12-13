@@ -497,7 +497,7 @@ Irssi::signal_add_last('setup changed',           'signal_setup_changed_last');
 Irssi::command_bind('splitmode', 'command_splitmode', 'mh_sbsplitmode');
 Irssi::command_bind('help',      'command_help');
 
-timeout_request_stats_d()
+timeout_request_stats_d();
 
 1;
 
