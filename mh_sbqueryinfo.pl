@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.00 (20151218)
+# mh_sbqueryinfo.pl v1.01 (20151218)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -87,10 +87,16 @@
 # mh_sbqueryinfo_detail_idle_minimum (default 300): minimum idle time in seconds before
 # the idle counter is shown on the statusbar item
 #
+# mh_sbqueryinfo_show_detail_realname (default ON): enable/disable showing realname
+# in the statusbar item
+#
 # this script is dedicated to Witch, without who i would not have bothered to follow
 # through on this idea
 #
 # history:
+#	v1.01 (20151218)
+#		now updates statusbar item correctly when setup changes
+#		added _show_detail_realname and supporting code
 #	v1.00 (20151218)
 #		initial release
 #
@@ -108,7 +114,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -117,7 +123,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Fri Dec 18 17:51:07 CET 2015',
+	'changed'     => 'Fri Dec 18 19:28:47 CET 2015',
 );
 
 ##############################################################################
@@ -340,6 +346,11 @@ sub signal_window_changed
 	{
 		Irssi::statusbar_items_redraw('mh_sbqueryinfo');
 	}
+}
+
+sub signal_setup_changed
+{
+	Irssi::statusbar_items_redraw('mh_sbqueryinfo');
 }
 
 sub signal_redir_event_301
@@ -597,8 +608,6 @@ sub signal_redir_event_319
 					$channellist->{$channelname} = $channelprefix;
 				}
 
-				print Dumper $channellist;
-
 				for my $channelname (split(' ', $channels))
 				{
 					$channelname =~ s/^[@%+]//;
@@ -606,7 +615,6 @@ sub signal_redir_event_319
 
 					if (exists($channellist->{$channelname}))
 					{
-						print "removed $channelname";
 						delete($channellist->{$channelname});
 					}
 				}
@@ -821,9 +829,12 @@ sub statusbar_queryinfo
 			{
 				if (exists($queries->{$servertag}->{$nickname}))
 				{
-					if ($queries->{$servertag}->{$nickname}->{'realname'} ne '')
+					if (Irssi::settings_get_bool('mh_sbqueryinfo_show_detail_realname'))
 					{
-						$format = $format . '\'' . Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}) . '\'';
+						if ($queries->{$servertag}->{$nickname}->{'realname'} ne '')
+						{
+							$format = $format . '\'' . Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}) . '\'';
+						}
 					}
 
 					if ($queries->{$servertag}->{$nickname}->{'offline'})
@@ -889,29 +900,31 @@ Irssi::theme_register([
 	'mh_sbqueryinfo_whoq_idle',     ' idle     : $0%n',
 ]);
 
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_delay',               2);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_lag_limit',           5);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_realname',       1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_userhost',       1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_server',         1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_join',   1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_part',   1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_gone',           1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_here',           1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_oper',           1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_deop',           1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_online',         1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline',        1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here',      1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_gone',      1);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_show_idle_minimum',   300);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_detail_idle_minimum', 300);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_delay',                2);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_lag_limit',            5);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_realname',        1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_userhost',        1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_server',          1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_join',    1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_part',    1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_gone',            1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_here',            1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_oper',            1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_deop',            1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_online',          1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline',         1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here',       1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_gone',       1);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_show_idle_minimum',    300);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_detail_idle_minimum',  300);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_detail_realname', 1);
 
 Irssi::statusbar_item_register('mh_sbqueryinfo', '', 'statusbar_queryinfo');
 
 Irssi::signal_add('query created',                  'signal_query_created');
 Irssi::signal_add('query destroyed',                'signal_query_destroyed');
 Irssi::signal_add('window changed',                 'signal_window_changed');
+Irssi::signal_add('setup changed',                  'signal_setup_changed');
 Irssi::signal_add('redir mh_sbqueryinfo event 301', 'signal_redir_event_301');
 Irssi::signal_add('redir mh_sbqueryinfo event 311', 'signal_redir_event_311');
 Irssi::signal_add('redir mh_sbqueryinfo event 312', 'signal_redir_event_312');
