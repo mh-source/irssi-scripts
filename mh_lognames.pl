@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_lognames.pl v1.02 (20151128)
+# mh_lognames.pl v1.03 (20151222)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -31,11 +31,16 @@
 # possible to catch the /NAMES reply and print it without the "clientcrap"
 # level set. but i will leave it as-is for now.
 #
-# to change the delay, find the variable "$delay_minutes" below, and change
-# the value. the default is "our $delay_minutes = 30;" which will issue
-# /NAMES every 30 minutes.
+# settings:
+#
+# mh_lognames_delay (default 30): delay (in minutes) between requesting /NAMES.
+# when you change the delay you might want to reload the script to restart the
+# timeout
 #
 # history:
+#	v1.03 (20151222)
+#		added _delay and supporting code
+#		added changed field to irssi header
 #	v1.02 (20151128)
 #		changed url
 #	v1.01 (20151121)
@@ -58,7 +63,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 our %IRSSI   =
 (
 	'name'        => 'mh_lognames',
@@ -67,15 +72,8 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
+	'changed'     => 'Tue Dec 22 03:58:19 CET 2015',
 );
-
-##############################################################################
-#
-# global variables
-#
-##############################################################################
-
-our $delay_minutes = 30; # delay in minutes, do not set to 0!
 
 ##############################################################################
 #
@@ -87,11 +85,30 @@ sub timeout_lognames
 {
 	for my $channel (Irssi::channels())
 	{
-		$channel->command('/NAMES');
+		$channel->command('NAMES');
 	}
+
+	my $delay = Irssi::settings_get_int('mh_lognames_delay');
+
+	if (not $delay)
+	{
+		$delay = 1;
+	}
+
+	$delay = $delay * 60000; # minutes to msec
+
+	Irssi::timeout_add_once($delay, 'timeout_lognames', undef);
 }
 
-Irssi::timeout_add(60000 * $delay_minutes, 'timeout_lognames', undef);
+##############################################################################
+#
+# script on load
+#
+##############################################################################
+
+Irssi::settings_add_int('mh_lognames', 'mh_lognames_delay', 30);
+
+timeout_lognames;
 
 1;
 
