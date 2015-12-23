@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.06 (20151212)
+# mh_hilog.pl v1.07 (20151223)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -36,6 +36,9 @@
 # mh_hilog_show_network (default ON): enable/disable showing the hilight
 # window network part
 #
+# mh_hilog_strip_colours (default OFF): enable/disable stripping colours
+# from the logged text
+#
 # mh_hilog_prefix (default 'hilog: '): set on unset the text prefix
 # in the statusbar item
 #
@@ -47,6 +50,9 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.07 (20151223)
+#		added changed field to irssi header
+#		added _strip_colours and supporting code
 #	v1.06 (20151212)
 #		added indents to /help
 #	v1.05 (20151209)
@@ -79,7 +85,7 @@ use File::Path qw(make_path remove_tree);
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -88,6 +94,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
+	'changed'     => 'Wed Dec 23 05:48:47 CET 2015',
 );
 
 ##############################################################################
@@ -240,13 +247,21 @@ sub signal_print_text
 
 		if (not $ignore)
 		{
+			if (Irssi::settings_get_bool('mh_hilog_strip_colours'))
+			{
+				$text = Irssi::strip_codes($text);
+			}
+
 			push(@hilog, $mday . '/' . $mon . ' ' . $hour . ':' . $min . ' ' . $refnum . '{' . $servertag  . $textdest->{'target'} . '} ' . $text);
 			$hilog_count++;
+
 			Irssi::statusbar_items_redraw('mh_sbhilog');
+
 			if ($hilog_save_timeout)
 			{
 				Irssi::timeout_remove($hilog_save_timeout);
 			}
+
 			$hilog_save_timeout = Irssi::timeout_add_once(60000, 'hilog_save', undef); # one minute grace-period
 		}
 	}
@@ -341,10 +356,11 @@ sub statusbar_hilog
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_hilog',  'mh_hilog_prefix',       'hilog: ');
-Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_network', 1);
-Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_refnum',  1);
-Irssi::settings_add_str('mh_hilog',  'mh_hilog_ignore',       '');
+Irssi::settings_add_str('mh_hilog',  'mh_hilog_prefix',        'hilog: ');
+Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_network',  1);
+Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_refnum',   1);
+Irssi::settings_add_bool('mh_hilog', 'mh_hilog_strip_colours', 0);
+Irssi::settings_add_str('mh_hilog',  'mh_hilog_ignore',        '');
 
 Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
 
