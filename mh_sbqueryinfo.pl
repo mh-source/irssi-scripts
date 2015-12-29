@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.06 (20151228)
+# mh_sbqueryinfo.pl v1.07 (20151229)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -125,6 +125,8 @@
 # through on this idea
 #
 # history:
+#	v1.07 (20151229)
+#		small fix to timestring output, it didnt always show correctly
 #	v1.06 (20151228)
 #		now reacts faster on notifylist changes
 #		added days and weeks to idletime display
@@ -175,7 +177,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -184,7 +186,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Mon Dec 28 10:39:19 CET 2015',
+	'changed'     => 'Tue Dec 29 09:58:22 CET 2015',
 );
 
 ##############################################################################
@@ -240,19 +242,19 @@ sub time_string
 	$seconds      = $seconds - ($seconds_m * 60);
 	my $always    = 0;
 
-	if ($seconds_w)
+	if ($seconds_w or $always)
 	{
 		$string = $string . $seconds_d . 'w';
 		$always = 1;
 	}
 
-	if ($seconds_d)
+	if ($seconds_d or $always)
 	{
 		$string = $string . $seconds_d . 'd';
 		$always = 1;
 	}
 
-	if ($seconds_h)
+	if ($seconds_h or $always)
 	{
 		$string = $string . $seconds_h . 'h';
 		$always = 1;
