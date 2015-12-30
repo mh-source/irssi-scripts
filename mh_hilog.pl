@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.07 (20151223)
+# mh_hilog.pl v1.08 (20151230)
 #
 # Copyright (c) 2015  Michael Hansen
 #
@@ -50,6 +50,9 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#	v1.08 (20151230)
+#		now ignores whitespace around _ignore entries
+#		code cleanup
 #	v1.07 (20151223)
 #		added changed field to irssi header
 #		added _strip_colours and supporting code
@@ -85,7 +88,7 @@ use File::Path qw(make_path remove_tree);
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.07';
+our $VERSION = '1.08';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -94,7 +97,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Wed Dec 23 05:48:47 CET 2015',
+	'changed'     => 'Wed Dec 30 11:03:45 CET 2015',
 );
 
 ##############################################################################
@@ -115,19 +118,19 @@ our $hilog_save_timeout;
 
 sub trim_space
 {
-   my ($string) = @_;
+	my ($string) = @_;
 
-   if (defined($string))
-   {
-      $string =~ s/^\s+//g;
-      $string =~ s/\s+$//g;
+	if (defined($string))
+	{
+		$string =~ s/^\s+//g;
+		$string =~ s/\s+$//g;
 
-   } else {
+	} else
+	{
+		$string = '';
+	}
 
-      $string = '';
-   }
-
-   return($string);
+	return($string);
 }
 
 ##############################################################################
@@ -236,7 +239,7 @@ sub signal_print_text
 
 		for my $server_target_ignore (split(',', Irssi::settings_get_str('mh_hilog_ignore')))
 		{
-			$server_target_ignore = lc($server_target_ignore);
+			$server_target_ignore = lc(trim_space($server_target_ignore));
 
 			if ($server_target_ignore eq $server_target)
 			{
