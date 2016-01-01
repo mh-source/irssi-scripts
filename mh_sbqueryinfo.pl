@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.07 (20151229)
+# mh_sbqueryinfo.pl v1.08 (20160101)
 #
-# Copyright (c) 2015  Michael Hansen
+# Copyright (c) 2015, 2016  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -97,6 +97,9 @@
 # mh_sbqueryinfo_show_detail_realname (default ON): enable/disable showing realname
 # in the statusbar item
 #
+# mh_sbqueryinfo_strip_realname (default OFF): enable/disable stripping colour
+# codes from the realname when printing it in a window
+#
 # mh_sbqueryinfo_silent_when_away (default OFF): enable/disable showing any updates
 # in the query when we are marked away (the statusbar item still updates)
 #
@@ -125,6 +128,11 @@
 # through on this idea
 #
 # history:
+#	v1.08 (20160101)
+#		now reacts to a user coming back online and messaging you, setting them online
+#		no longer prints /whoq in every query on script load
+#		added _strip_realname and supporting code
+#		realname is now sanitised before being printed in the statusbar
 #	v1.07 (20151229)
 #		small fix to timestring output, it didnt always show correctly
 #	v1.06 (20151228)
@@ -177,7 +185,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.07';
+our $VERSION = '1.08';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -186,7 +194,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Dec 29 09:58:22 CET 2015',
+	'changed'     => 'Fri Jan  1 13:31:46 CET 2016',
 );
 
 ##############################################################################
@@ -196,6 +204,7 @@ our %IRSSI   =
 ##############################################################################
 
 our $queries;
+our $on_load = 1;
 
 ##############################################################################
 #
@@ -304,6 +313,24 @@ sub channel_prefix
 	}
 
 	return('');
+}
+
+sub strip_format
+{
+	my ($string) = @_;
+
+	if ($string)
+	{
+		$string =~ s/\$/\$\$/g;
+		$string =~ s/%/%%/g;
+		$string =~ s/{/%{/g;
+		$string =~ s/}/%}/g;
+	} else
+	{
+		$string = '';
+	}
+
+	return($string);
 }
 
 ##############################################################################
@@ -577,7 +604,15 @@ sub signal_redir_event_311
 									$msglevel = $msglevel | Irssi::MSGLEVEL_NO_ACT;
 								}
 
-								$query->printformat($msglevel, 'mh_sbqueryinfo_realname', $query->{'name'}, $queries->{$servertag}->{$nickname}->{'realname'}, $realname);
+								if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+								{
+									$query->printformat($msglevel, 'mh_sbqueryinfo_realname', $query->{'name'}, Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}), Irssi::strip_codes($realname));
+
+								} else
+								{
+									$query->printformat($msglevel, 'mh_sbqueryinfo_realname', $query->{'name'}, $queries->{$servertag}->{$nickname}->{'realname'}, $realname);
+								}
+
 							}
 						}
 					}
@@ -1226,6 +1261,15 @@ sub signal_message_private
 			if (exists($queries->{$servertag}->{$nickname}))
 			{
 				#
+				# start a new fast timeout if this query is offline
+				#
+				if ($queries->{$servertag}->{$nickname}->{'offline'})
+				{
+					my @args = ($servertag, $nickname);
+					$queries->{$servertag}->{$nickname}->{'timeout'} = Irssi::timeout_add_once(100, 'timeout_request_whois', \@args);
+				}
+
+				#
 				# unset idle and start a new fast timeout if this query is idle
 				#
 				signal_redir_event_317($server, $server->{'nick'} . ' ' . $nickname . ' ' . '0 ' . $queries->{$servertag}->{$nickname}->{'signon'} . ' :seconds idle, signon time', $queries->{$servertag}->{$nickname}->{'servername'});
@@ -1301,7 +1345,7 @@ sub signal_query_created
 	#
 	# initialise query structure
 	#
-	$queries->{$servertag}->{$nickname}->{'firsttime'}       = 2;
+	$queries->{$servertag}->{$nickname}->{'firsttime'}       = 2 - $on_load;
 	$queries->{$servertag}->{$nickname}->{'offline'}         = 0;
 	$queries->{$servertag}->{$nickname}->{'realname'}        = '';
 	$queries->{$servertag}->{$nickname}->{'oper'}            = 0;
@@ -1505,7 +1549,16 @@ sub command_whoq
 						# print cached whois information
 						#
 						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user',     $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'userhost'});
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', $queries->{$servertag}->{$nickname}->{'realname'});
+
+						if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}));
+
+						} else
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', $queries->{$servertag}->{$nickname}->{'realname'});
+						}
+
 						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server',   $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
 						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signon',   '' . localtime($queries->{$servertag}->{$nickname}->{'signon'}));
 
@@ -1623,7 +1676,7 @@ sub statusbar_queryinfo
 					{
 						if ($queries->{$servertag}->{$nickname}->{'realname'} ne '')
 						{
-							$format = $format . '\'' . Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}) . '\'';
+							$format = $format . '\'' . Irssi::strip_codes(strip_format($queries->{$servertag}->{$nickname}->{'realname'})) . '\'';
 						}
 					}
 
@@ -1746,6 +1799,7 @@ Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_offline_signof
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_here',       0);
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_gone',       0);
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_on_create',         1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_strip_realname',         0);
 
 Irssi::statusbar_item_register('mh_sbqueryinfo', '', 'statusbar_queryinfo');
 
@@ -1781,6 +1835,8 @@ for my $query (Irssi::queries())
 {
 	signal_query_created($query);
 }
+
+$on_load = 0;
 
 1;
 
