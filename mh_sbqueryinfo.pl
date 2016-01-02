@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.08 (20160101)
+# mh_sbqueryinfo.pl v1.09 (20160102)
 #
 # Copyright (c) 2015, 2016  Michael Hansen
 #
@@ -106,6 +106,15 @@
 # mh_sbqueryinfo_whoq_on_create (default ON): enable/disable showing /WHOQ when
 # a query is created
 #
+# mh_sbqueryinfo_idle_longformat (default ON): enable/disable showing the
+# idletime in long format when printing "is no longer idle"
+#
+# mh_sbqueryinfo_detail_idle_longformat (default OFF): enable/disable showing
+# the idletime in the statusbar in long format
+#
+# mh_sbqueryinfo_whoq_idle_longformat (default ON): enable/disable showing the
+# idletime in /whoq in long format
+#
 # the following 'no_act' settings pairs with their 'show' counterparts and enables
 # or disables channel activity for the given information, they all default to OFF
 #
@@ -128,6 +137,9 @@
 # through on this idea
 #
 # history:
+#	v1.09 (20160102)
+#		added _idle_longformat, _detail_idle_longformat and whoq_idle_longformat and supporting code
+#		fixed a bug in the idletime display
 #	v1.08 (20160101)
 #		now reacts to a user coming back online and messaging you, setting them online
 #		no longer prints /whoq in every query on script load
@@ -185,7 +197,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.08';
+our $VERSION = '1.09';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -194,7 +206,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Fri Jan  1 13:31:46 CET 2016',
+	'changed'     => 'Sat Jan  2 12:40:23 CET 2016',
 );
 
 ##############################################################################
@@ -237,7 +249,7 @@ sub trim_space
 
 sub time_string
 {
-	my ($seconds) = @_;
+	my ($seconds, $longformat) = @_;
 
 	my $string    = '';
 
@@ -250,34 +262,48 @@ sub time_string
 	my $seconds_m = int($seconds / 60);
 	$seconds      = $seconds - ($seconds_m * 60);
 	my $always    = 0;
+	my $string_w  = 'w';
+	my $string_d  = 'd';
+	my $string_h  = 'h';
+	my $string_m  = 'm';
+	my $string_s  = 's';
+
+	if ($longformat)
+	{
+		$string_w  = ' weeks ';
+		$string_d  = ' days ';
+		$string_h  = ' hours ';
+		$string_m  = ' mins ';
+		$string_s  = ' secs';
+	}
 
 	if ($seconds_w or $always)
 	{
-		$string = $string . $seconds_d . 'w';
+		$string = $string . $seconds_w . $string_w;
 		$always = 1;
 	}
 
 	if ($seconds_d or $always)
 	{
-		$string = $string . $seconds_d . 'd';
+		$string = $string . $seconds_d . $string_d;
 		$always = 1;
 	}
 
 	if ($seconds_h or $always)
 	{
-		$string = $string . $seconds_h . 'h';
+		$string = $string . $seconds_h . $string_h;
 		$always = 1;
 	}
 
 	if ($seconds_m or $always)
 	{
-		$string = $string . $seconds_m . 'm';
+		$string = $string . $seconds_m . $string_m;
 		$always = 1;
 	}
 
 	if ($seconds or $always)
 	{
-		$string = $string . $seconds . 's';
+		$string = $string . $seconds . $string_s;
 
 	} else
 	{
@@ -829,7 +855,7 @@ sub signal_redir_event_317
 
 										if (Irssi::settings_get_bool('mh_sbqueryinfo_show_idle_here_time'))
 										{
-											$query->printformat($msglevel, 'mh_sbqueryinfo_idle_here_time', $query->{'name'}, time_string($queries->{$servertag}->{$nickname}->{'idle'}));
+											$query->printformat($msglevel, 'mh_sbqueryinfo_idle_here_time', $query->{'name'}, time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_idle_longformat')));
 
 										} else
 										{
@@ -1596,7 +1622,7 @@ sub command_whoq
 							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_gone', $queries->{$servertag}->{$nickname}->{'gone_reason'});
 						}
 
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_idle', time_string($queries->{$servertag}->{$nickname}->{'idle'}));
+						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_idle', time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_whoq_idle_longformat')));
 
 					} else {
 
@@ -1694,7 +1720,7 @@ sub statusbar_queryinfo
 						#
 						if ($queries->{$servertag}->{$nickname}->{'idle'} >= Irssi::settings_get_int('mh_sbqueryinfo_detail_idle_minimum'))
 						{
-							$format = $format . ' ' . time_string($queries->{$servertag}->{$nickname}->{'idle'});
+							$format = $format . ' ' . time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_detail_idle_longformat'));
 						}
 
 						#
@@ -1800,6 +1826,9 @@ Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_here',   
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_gone',       0);
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_on_create',         1);
 Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_strip_realname',         0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_idle_longformat',        1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_detail_idle_longformat', 0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_idle_longformat',   1);
 
 Irssi::statusbar_item_register('mh_sbqueryinfo', '', 'statusbar_queryinfo');
 
