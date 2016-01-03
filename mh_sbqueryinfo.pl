@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.09 (20160102)
+# mh_sbqueryinfo.pl v1.10 (20160103)
 #
 # Copyright (c) 2015, 2016  Michael Hansen
 #
@@ -41,7 +41,7 @@
 # mh_sbqueryinfo_delay (default 2): aproximate delay (in minutes) between updating
 # (how often we call whois)
 #
-# mh_sbqueryinfo_lag_limit' (default 5): if lag is higher than this (in seconds)
+# mh_sbqueryinfo_lag_limit (default 5): if lag is higher than this (in seconds)
 # calls to whois will be skipped to avoid increasing lag
 #
 # mh_sbqueryinfo_show_realname (default ON): enable/disable showing realname changes
@@ -100,11 +100,21 @@
 # mh_sbqueryinfo_strip_realname (default OFF): enable/disable stripping colour
 # codes from the realname when printing it in a window
 #
+# mh_sbqueryinfo_strip_quit_reason (default OFF): enable/disable stripping colour
+# codes from the quit reason when printing it in a window
+#
 # mh_sbqueryinfo_silent_when_away (default OFF): enable/disable showing any updates
-# in the query when we are marked away (the statusbar item still updates)
+# in the query when we are marked away (the statusbar item still updates, and so
+# does automatic /WHOQ requests)
+#
+# mh_sbqueryinfo_whoq_when_away (default ON): enable/disable showing automatic
+# /WHOQ requests when away (on create and on offline)
 #
 # mh_sbqueryinfo_whoq_on_create (default ON): enable/disable showing /WHOQ when
 # a query is created
+#
+# mh_sbqueryinfo_whoq_on_offline (default ON): enable/disable showing /WHOQ when
+# a query user quits
 #
 # mh_sbqueryinfo_idle_longformat (default ON): enable/disable showing the
 # idletime in long format when printing "is no longer idle"
@@ -137,6 +147,12 @@
 # through on this idea
 #
 # history:
+#	v1.09 (20160103)
+#		other minor changes to make it react faster under certain circumstances
+#		now prints quit-reason in whowas /whoq if it is known
+#		added _whoq_when_away and supporting code
+#		added _whoq_on_offline and supporting code
+#		now shows old whois information in /whoq of quit users, if known
 #	v1.09 (20160102)
 #		added _idle_longformat, _detail_idle_longformat and whoq_idle_longformat and supporting code
 #		fixed a bug in the idletime display
@@ -197,7 +213,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.09';
+our $VERSION = '1.10';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -206,7 +222,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Sat Jan  2 12:40:23 CET 2016',
+	'changed'     => 'Sun Jan  3 09:51:03 CET 2016',
 );
 
 ##############################################################################
@@ -470,6 +486,7 @@ sub timeout_request_whowas
 							{          # signals
 								'event 312' => 'redir mh_sbqueryinfo event 312ww', # RPL_WHOISSERVER
 								'event 314' => 'redir mh_sbqueryinfo event 314',   # RPL_WHOWASUSER
+								'event 369' => 'redir mh_sbqueryinfo event 369',   # RPL_ENDOFWHOWAS
 								''          => 'event empty',
 							}
 						);
@@ -553,11 +570,11 @@ sub signal_redir_event_311
 
 			if (exists($queries->{$servertag}))
 			{
-				#
-				# print online
-				#
 				if (exists($queries->{$servertag}->{$nickname}))
 				{
+					#
+					# print online
+					#
 					if (Irssi::settings_get_bool('mh_sbqueryinfo_show_online') and (not $silent))
 					{
 						if ($queries->{$servertag}->{$nickname}->{'offline'})
@@ -584,8 +601,10 @@ sub signal_redir_event_311
 					# clean up query structure for this nick
 					#
 					$queries->{$servertag}->{$nickname}->{'offline'}         = 0;
+					$queries->{$servertag}->{$nickname}->{'signon'}          = 0;
 					$queries->{$servertag}->{$nickname}->{'gone'}            = 0;
 					$queries->{$servertag}->{$nickname}->{'gone_reason'}     = '';
+					$queries->{$servertag}->{$nickname}->{'quit_reason'}     = '';
 					$queries->{$servertag}->{$nickname}->{'oper'}            = 0;
 					$queries->{$servertag}->{$nickname}->{'whowas'}          = 0;
 					$queries->{$servertag}->{$nickname}->{'whowas_realname'} = '';
@@ -1001,7 +1020,10 @@ sub signal_redir_event_318
 					#
 					if (($queries->{$servertag}->{$nickname}->{'firsttime'} == 2) and Irssi::settings_get_bool('mh_sbqueryinfo_whoq_on_create'))
 					{
-						$query->command('WHOQ');
+						if ((not $server->{'usermode_away'}) or ($server->{'usermode_away'} and Irssi::settings_get_bool('mh_sbqueryinfo_whoq_when_away')))
+						{
+							$query->command('WHOQ');
+						}
 					}
 
 					#
@@ -1149,6 +1171,38 @@ sub signal_redir_event_319
 	}
 }
 
+sub signal_redir_event_369
+{
+	my ($server, $data, $sender) = @_;
+
+	if (Irssi::settings_get_bool('mh_sbqueryinfo_whoq_on_offline'))
+	{
+		if ((not $server->{'usermode_away'}) or ($server->{'usermode_away'} and Irssi::settings_get_bool('mh_sbqueryinfo_whoq_when_away')))
+		{
+			if ($queries)
+			{
+				if ($data =~ m/^.*? (.*?) :.*$/)
+				{
+					my $servertag = lc($server->{'tag'});
+					my $nickname  = lc($1);
+					my $query     = $server->query_find($nickname);
+
+					if (exists($queries->{$servertag}))
+					{
+						if (exists($queries->{$servertag}->{$nickname}))
+						{
+							if ($query)
+							{
+								$query->command('WHOQ');
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 sub signal_redir_event_401
 {
 	my ($server, $data, $sender) = @_;
@@ -1165,75 +1219,107 @@ sub signal_redir_event_401
 			{
 				if (exists($queries->{$servertag}->{$nickname}))
 				{
-					if (not $queries->{$servertag}->{$nickname}->{'offline'} and (not $silent))
+					if (not $queries->{$servertag}->{$nickname}->{'offline'})
 					{
+						Irssi::signal_stop(); # if this is a wild 'event 401' we dont want it to print
+
 						#
 						# print offline
 						#
-						if (Irssi::settings_get_bool('mh_sbqueryinfo_show_offline'))
+						if (not $silent)
 						{
-							my $query = $server->query_find($nickname);
-
-							if ($query)
+							if (Irssi::settings_get_bool('mh_sbqueryinfo_show_offline'))
 							{
-								my $msglevel = Irssi::MSGLEVEL_CRAP;
+								my $query = $server->query_find($nickname);
 
-								if (Irssi::settings_get_bool('mh_sbqueryinfo_no_act_offline'))
+								if ($query)
 								{
-									$msglevel = $msglevel | Irssi::MSGLEVEL_NO_ACT;
-								}
+									my $msglevel = Irssi::MSGLEVEL_CRAP;
 
-								$query->printformat($msglevel, 'mh_sbqueryinfo_offline', $query->{'name'});
-							}
-						}
+									if (Irssi::settings_get_bool('mh_sbqueryinfo_no_act_offline'))
+									{
+										$msglevel = $msglevel | Irssi::MSGLEVEL_NO_ACT;
+									}
 
-						#
-						# update query structure for this nick
-						#
-						$queries->{$servertag}->{$nickname}->{'offline'}         = 1;
-						$queries->{$servertag}->{$nickname}->{'oper'}            = 0;
-						$queries->{$servertag}->{$nickname}->{'gone'}            = 0;
-						$queries->{$servertag}->{$nickname}->{'gone_reason'}     = '';
-						$queries->{$servertag}->{$nickname}->{'idle'}            = 0;
-						$queries->{$servertag}->{$nickname}->{'signon'}          = 0;
-						$queries->{$servertag}->{$nickname}->{'channels'}        = '';
-						$queries->{$servertag}->{$nickname}->{'gone_old'}        = $queries->{$servertag}->{$nickname}->{'gone'};
-						$queries->{$servertag}->{$nickname}->{'gone_reason_old'} = $queries->{$servertag}->{$nickname}->{'gone_reason'};
-						$queries->{$servertag}->{$nickname}->{'oper_old'}        = $queries->{$servertag}->{$nickname}->{'oper'};
-
-						#
-						# update statusbar item if this is the active query
-						#
-						my $window = Irssi::active_win();
-						my $query  = $window->{'active'};
-
-						if (ref($query) eq 'Irssi::Irc::Query')
-						{
-							if (lc($query->{'server_tag'}) eq $servertag)
-							{
-								if (lc($query->{'name'}) eq $nickname)
-								{
-									Irssi::statusbar_items_redraw('mh_sbqueryinfo');
+									$query->printformat($msglevel, 'mh_sbqueryinfo_offline', $query->{'name'});
 								}
 							}
 						}
 					}
 
-					if (not $queries->{$servertag}->{$nickname}->{'firsttime'})
+					#
+					# update query structure for this nick
+					#
+					$queries->{$servertag}->{$nickname}->{'offline'}         = 1;
+					$queries->{$servertag}->{$nickname}->{'gone_old'}        = 0;
+                    $queries->{$servertag}->{$nickname}->{'gone_reason_old'} = '';
+                    $queries->{$servertag}->{$nickname}->{'oper_old'}        = 0;
+
+					#
+					# update statusbar item if this is the active query
+					#
+					my $window = Irssi::active_win();
+					my $query  = $window->{'active'};
+
+					if (ref($query) eq 'Irssi::Irc::Query')
 					{
-						$queries->{$servertag}->{$nickname}->{'firsttime'} = 1;
+						if (lc($query->{'server_tag'}) eq $servertag)
+						{
+							if (lc($query->{'name'}) eq $nickname)
+							{
+								Irssi::statusbar_items_redraw('mh_sbqueryinfo');
+							}
+						}
+					}
+				}
+
+				if (not $queries->{$servertag}->{$nickname}->{'firsttime'})
+				{
+					$queries->{$servertag}->{$nickname}->{'firsttime'} = 1;
+				}
+
+				if (not $queries->{$servertag}->{$nickname}->{'whowas'})
+				{
+					$queries->{$servertag}->{$nickname}->{'whowas'} = 1;
+
+					#
+					# start whowas timeout
+					#
+					my @args = ($servertag, $nickname);
+					Irssi::timeout_add_once(100, 'timeout_request_whowas', \@args);
+				}
+			}
+		}
+	}
+}
+
+sub signal_channel_sync
+{
+	my ($channel) = @_;
+
+	if ($queries)
+	{
+		my $server    = $channel->{'server'};
+		my $servertag = lc($server->{'tag'});
+
+		if (exists($queries->{$servertag}))
+		{
+			for my $nick ($channel->nicks())
+			{
+				my $nickname = lc($nick->{'nick'});
+
+				if (exists($queries->{$servertag}->{$nickname}))
+				{
+					#
+					# start a new fast timeout
+					#
+					if ($queries->{$servertag}->{$nickname}->{'timeout'})
+					{
+						Irssi::timeout_remove($queries->{$servertag}->{$nickname}->{'timeout'});
 					}
 
-					if (not $queries->{$servertag}->{$nickname}->{'whowas'})
-					{
-						$queries->{$servertag}->{$nickname}->{'whowas'} = 1;
-
-						#
-						# start whowas timeout
-						#
-						my @args = ($servertag, $nickname);
-						Irssi::timeout_add_once(100, 'timeout_request_whowas', \@args);
-					}
+					my @args = ($servertag, $nickname);
+					$queries->{$servertag}->{$nickname}->{'timeout'} = Irssi::timeout_add_once(100, 'timeout_request_whois', \@args);
 				}
 			}
 		}
@@ -1255,18 +1341,15 @@ sub signal_message_join
 			if (exists($queries->{$servertag}->{$nickname}))
 			{
 				#
-				# start a new fast timeout if this query is offline
+				# start a new fast timeout
 				#
-				if ($queries->{$servertag}->{$nickname}->{'offline'})
+				if ($queries->{$servertag}->{$nickname}->{'timeout'})
 				{
-					if ($queries->{$servertag}->{$nickname}->{'timeout'})
-					{
-						Irssi::timeout_remove($queries->{$servertag}->{$nickname}->{'timeout'});
-					}
-
-					my @args = ($servertag, $nickname);
-					$queries->{$servertag}->{$nickname}->{'timeout'} = Irssi::timeout_add_once(100, 'timeout_request_whois', \@args);
+					Irssi::timeout_remove($queries->{$servertag}->{$nickname}->{'timeout'});
 				}
+
+				my @args = ($servertag, $nickname);
+				$queries->{$servertag}->{$nickname}->{'timeout'} = Irssi::timeout_add_once(100, 'timeout_request_whois', \@args);
 			}
 		}
 	}
@@ -1346,6 +1429,8 @@ sub signal_message_quit
 
 			if (exists($queries->{$servertag}->{$nickname}))
 			{
+				$queries->{$servertag}->{$nickname}->{'quit_reason'} = $reason;
+
 				#
 				# start a new fast timeout for this query
 				#
@@ -1373,6 +1458,7 @@ sub signal_query_created
 	#
 	$queries->{$servertag}->{$nickname}->{'firsttime'}       = 2 - $on_load;
 	$queries->{$servertag}->{$nickname}->{'offline'}         = 0;
+	$queries->{$servertag}->{$nickname}->{'quit_reason'}     = '';
 	$queries->{$servertag}->{$nickname}->{'realname'}        = '';
 	$queries->{$servertag}->{$nickname}->{'oper'}            = 0;
 	$queries->{$servertag}->{$nickname}->{'gone'}            = 0;
@@ -1574,7 +1660,7 @@ sub command_whoq
 						#
 						# print cached whois information
 						#
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user',     $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'userhost'});
+						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user', $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'userhost'});
 
 						if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
 						{
@@ -1585,8 +1671,12 @@ sub command_whoq
 							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', $queries->{$servertag}->{$nickname}->{'realname'});
 						}
 
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server',   $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signon',   '' . localtime($queries->{$servertag}->{$nickname}->{'signon'}));
+						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server', $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+
+						if ($queries->{$servertag}->{$nickname}->{'signon'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signon', '' . localtime($queries->{$servertag}->{$nickname}->{'signon'}));
+						}
 
 						if ($queries->{$servertag}->{$nickname}->{'oper'})
 						{
@@ -1631,8 +1721,73 @@ sub command_whoq
 						#
 						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user_whowas',     $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'whowas_userhost'});
 						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname_whowas', $queries->{$servertag}->{$nickname}->{'whowas_realname'});
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server_whowas',   $queries->{$servertag}->{$nickname}->{'whowas_server'});
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signoff_whowas',  $queries->{$servertag}->{$nickname}->{'whowas_signoff'});
+
+						if ($queries->{$servertag}->{$nickname}->{'servername'} eq '')
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'});
+
+						} else
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server2_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'}, $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+						}
+
+						if ($queries->{$servertag}->{$nickname}->{'signon'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signon_whowas', '' . localtime($queries->{$servertag}->{$nickname}->{'signon'}));
+						}
+
+						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signoff_whowas', $queries->{$servertag}->{$nickname}->{'whowas_signoff'});
+
+						if ($queries->{$servertag}->{$nickname}->{'oper'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_oper_whowas');
+						}
+
+						if ($queries->{$servertag}->{$nickname}->{'channels'} ne '')
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_channels_whowas', $queries->{$servertag}->{$nickname}->{'channels'});
+						}
+
+						my $channels_shared = '';
+
+						for my $channelname (split(' ', $queries->{$servertag}->{$nickname}->{'channels'}))
+						{
+							$channelname =~ s/^[@%+]//;
+
+							my $channel = $server->channel_find($channelname);
+
+							if ($channel)
+							{
+								$channels_shared = $channels_shared . ' ' . channel_prefix($channel) . $channel->{'name'};
+							}
+						}
+
+						if ($channels_shared ne '')
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_shared_whowas', $channels_shared);
+						}
+
+						if ($queries->{$servertag}->{$nickname}->{'gone'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_gone_whowas', $queries->{$servertag}->{$nickname}->{'gone_reason'});
+						}
+
+						if ($queries->{$servertag}->{$nickname}->{'idle'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_idle_whowas', time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_whoq_idle_longformat')));
+						}
+
+						if ($queries->{$servertag}->{$nickname}->{'quit_reason'} ne '')
+						{
+							if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_quit_reason'))
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_quit_whowas', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'quit_reason'}));
+							} else
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_quit_whowas', $queries->{$servertag}->{$nickname}->{'quit_reason'});
+							}
+						}
+
 					}
 				}
 			}
@@ -1786,49 +1941,60 @@ Irssi::theme_register([
 	'mh_sbqueryinfo_whoq_user_whowas',     '{nick $0} was {nickhost $1}',
 	'mh_sbqueryinfo_whoq_realname_whowas', ' realname : $0%n',
 	'mh_sbqueryinfo_whoq_server_whowas',   ' server   : $0%n',
+	'mh_sbqueryinfo_whoq_server2_whowas',  ' server   : $0%n ($1%n {comment $2})',
+	'mh_sbqueryinfo_whoq_signon_whowas',   ' signon   : $0%n',
 	'mh_sbqueryinfo_whoq_signoff_whowas',  ' signoff  : $0%n',
+	'mh_sbqueryinfo_whoq_oper_whowas',     ' was oper : {hilight Was an IRC operator}',
+	'mh_sbqueryinfo_whoq_channels_whowas', ' channels : $0%n',
+	'mh_sbqueryinfo_whoq_shared_whowas',   ' shared   :$0%n',
+	'mh_sbqueryinfo_whoq_gone_whowas',     ' was gone : $0%n',
+	'mh_sbqueryinfo_whoq_idle_whowas',     ' was idle : $0%n',
+	'mh_sbqueryinfo_whoq_quit_whowas',     ' quit     : $0%n',
 ]);
 
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_delay',                  2);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_lag_limit',              5);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_realname',          1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_userhost',          1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_server',            1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_join',      1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_part',      1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_gone',              1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_here',              1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_oper',              1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_deop',              1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_online',            1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline',           1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline_signoff',   1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here',         1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here_time',    1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_gone',         1);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_show_idle_minimum',      300);
-Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_detail_idle_minimum',    300);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_detail_realname',   1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_silent_when_away',       0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_realname',        0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_userhost',        0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_server',          0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_channel_join',    0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_channel_part',    0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_gone',            0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_here',            0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_oper',            0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_deop',            0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_online',          0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_offline',         0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_offline_signoff', 0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_here',       0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_gone',       0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_on_create',         1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_strip_realname',         0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_idle_longformat',        1);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_detail_idle_longformat', 0);
-Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_idle_longformat',   1);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_delay',                   2);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_lag_limit',               5);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_realname',           1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_userhost',           1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_server',             1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_join',       1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_channel_part',       1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_gone',               1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_here',               1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_oper',               1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_deop',               1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_online',             1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline',            1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_offline_signoff',    1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here',          1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_here_time',     1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_idle_gone',          1);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_show_idle_minimum',       300);
+Irssi::settings_add_int('mh_sbqueryinfo',  'mh_sbqueryinfo_detail_idle_minimum',     300);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_show_detail_realname',    1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_silent_when_away',        0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_when_away',          1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_realname',         0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_userhost',         0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_server',           0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_channel_join',     0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_channel_part',     0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_gone',             0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_here',             0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_oper',             0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_deop',             0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_online',           0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_offline',          0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_offline_signoff',  0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_here',        0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_no_act_idle_gone',        0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_on_create',          1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_on_offline',         1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_strip_realname',          0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_strip_quit_reason',       0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_idle_longformat',         1);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_detail_idle_longformat',  0);
+Irssi::settings_add_bool('mh_sbqueryinfo', 'mh_sbqueryinfo_whoq_idle_longformat',    1);
 
 Irssi::statusbar_item_register('mh_sbqueryinfo', '', 'statusbar_queryinfo');
 
@@ -1841,7 +2007,10 @@ Irssi::signal_add('redir mh_sbqueryinfo event 314',   'signal_redir_event_314');
 Irssi::signal_add('redir mh_sbqueryinfo event 317',   'signal_redir_event_317');
 Irssi::signal_add('redir mh_sbqueryinfo event 318',   'signal_redir_event_318');
 Irssi::signal_add('redir mh_sbqueryinfo event 319',   'signal_redir_event_319');
+Irssi::signal_add('redir mh_sbqueryinfo event 369',   'signal_redir_event_369');
 Irssi::signal_add('redir mh_sbqueryinfo event 401',   'signal_redir_event_401');
+Irssi::signal_add('event 401',                        'signal_redir_event_401');
+Irssi::signal_add('channel sync',                     'signal_channel_sync');
 Irssi::signal_add('message join',                     'signal_message_join');
 Irssi::signal_add('message private',                  'signal_message_private');
 Irssi::signal_add('message public',                   'signal_message_private');
