@@ -25,12 +25,12 @@
 # screenshots:
 #
 #	without script: http://escaflowne.hro.nl/~mh/mh_windowfill_without.png
-#					or
-#					http://rud0lf.webatu.com/mh_windowfill_without.png
+#	                or
+#	                http://rud0lf.webatu.com/mh_windowfill_without.png
 #
 #	with script:    http://escaflowne.hro.nl/~mh/mh_windowfill_with.png
-#					or
-#					http://rud0lf.webatu.com/mh_windowfill_with.png
+#	                or
+#	                http://rud0lf.webatu.com/mh_windowfill_with.png
 #
 # history:
 #
@@ -79,7 +79,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'http://scripts.irssi.org / https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Sun Feb  7 18:15:52 CET 2016',
+	'changed'     => 'Sun Feb  7 18:24:50 CET 2016',
 );
 
 ##############################################################################
