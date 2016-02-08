@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_lognames.pl v1.03 (20151222)
+# mh_lognames.pl v1.04 (20160208)
 #
-# Copyright (c) 2015  Michael Hansen
+# Copyright (c) 2015, 2016  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -38,6 +38,9 @@
 # timeout
 #
 # history:
+#
+#	v1.04 (20160208)
+#		minor comment changes
 #	v1.03 (20151222)
 #		added _delay and supporting code
 #		added changed field to irssi header
@@ -63,7 +66,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_lognames',
@@ -72,7 +75,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Dec 22 03:58:19 CET 2015',
+	'changed'     => 'Mon Feb  8 18:05:56 CET 2016',
 );
 
 ##############################################################################
