@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.08 (20151230)
+# mh_hilog.pl v1.09 (20160208)
 #
-# Copyright (c) 2015  Michael Hansen
+# Copyright (c) 2015, 2016  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -50,6 +50,9 @@
 # see '/help statusbar' for more details and do not forget to '/save'
 #
 # history:
+#
+#	v1.09 (20160208)
+#		minor comment change
 #	v1.08 (20151230)
 #		now ignores whitespace around _ignore entries
 #		code cleanup
@@ -88,7 +91,7 @@ use File::Path qw(make_path remove_tree);
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.08';
+our $VERSION = '1.09';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -97,7 +100,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Wed Dec 30 11:03:45 CET 2015',
+	'changed'     => 'Mon Feb  8 17:55:47 CET 2016',
 );
 
 ##############################################################################
