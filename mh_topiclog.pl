@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_topiclog.pl v1.00 (20151222)
+# mh_topiclog.pl v1.01 (20160208)
 #
-# Copyright (c) 2015  Michael Hansen
+# Copyright (c) 2015, 2016  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -28,6 +28,9 @@
 # logs are saved in .irssi/mh_topiclog/network/channel.log
 #
 # history:
+#
+#	v1.01 (20160208)
+#		code cleanup
 #	v1.00 (20151222)
 #		initial release
 #
@@ -47,7 +50,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_topiclog',
@@ -56,7 +59,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Dec 22 06:15:52 CET 2015',
+	'changed'     => 'Mon Feb  8 19:01:34 CET 2016',
 );
 
 ##############################################################################
@@ -75,19 +78,19 @@ our $topiclogs;
 
 sub trim_space
 {
-   my ($string) = @_;
+	my ($string) = @_;
 
-   if (defined($string))
-   {
-      $string =~ s/^\s+//g;
-      $string =~ s/\s+$//g;
+	if (defined($string))
+	{
+		$string =~ s/^\s+//g;
+		$string =~ s/\s+$//g;
 
-   } else {
+	} else
+	{
+		$string = '';
+	}
 
-      $string = '';
-   }
-
-   return($string);
+	return($string);
 }
 
 ##############################################################################
@@ -437,7 +440,6 @@ for my $channel (Irssi::channels())
 	signal_channel_created_last($channel);
 	signal_channel_topic_changed_last($channel);
 }
-
 
 1;
 
