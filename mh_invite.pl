@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_invite.pl v1.00 (20160104)
+# mh_invite.pl v1.01 (20160213)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -58,6 +58,9 @@
 # window activity when printing in a query window
 #
 # history:
+#
+#	v1.01 (20160213)
+#		edited comment whitespace
 #	v1.00 (20160104)
 #		initial release
 #
@@ -76,7 +79,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 our %IRSSI   =
 (
 	'name'        => 'mh_invite',
@@ -85,7 +88,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Mon Jan  4 10:10:44 CET 2016',
+	'changed'     => 'Sat Feb 13 10:22:19 CET 2016',
 );
 
 ##############################################################################
