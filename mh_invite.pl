@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_invite.pl v1.01 (20160213)
+# mh_invite.pl v1.02 (20160305)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -59,6 +59,8 @@
 #
 # history:
 #
+#	v1.02 (20160305)
+#		added scripts.irssi.org to url
 #	v1.01 (20160213)
 #		edited comment whitespace
 #	v1.00 (20160104)
@@ -79,7 +81,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_invite',
@@ -87,8 +89,8 @@ our %IRSSI   =
 	'license'     => 'BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
-	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Sat Feb 13 10:22:19 CET 2016',
+	'url'         => 'http://scripts.irssi.org / https://github.com/mh-source/irssi-scripts',
+	'changed'     => 'Sat Mar  5 15:23:47 CET 2016',
 );
 
 ##############################################################################
