@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_cyk.pl v0.01 (20161017)
+# mh_cyk.pl v0.02 (20161018)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -24,6 +24,10 @@
 #
 # history:
 #
+#	v0.02 (20161018)
+#		accept own messages too
+#		automatic save/load data to/from a plain text file (mh_cyk.data) in the irssi dir
+#
 #	v0.01 (20161017)
 #		initial pre-release
 #
@@ -31,6 +35,7 @@
 use v5.14.2;
 
 use strict;
+use File::Path qw(make_path remove_tree);
 
 ##############################################################################
 #
@@ -42,7 +47,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_cyk',
@@ -51,7 +56,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Mon Oct 17 17:40:11 CEST 2016',
+	'changed'     => 'Tue Oct 18 12:24:05 CEST 2016',
 );
 
 ##############################################################################
@@ -61,6 +66,7 @@ our %IRSSI   =
 ##############################################################################
 
 our $list;
+our $data_save_timeout = 0;
 
 ##############################################################################
 #
@@ -83,6 +89,83 @@ sub trim_space
 	}
 
 	return($string);
+}
+
+##############################################################################
+#
+# script functions
+#
+##############################################################################
+
+sub data_load
+{
+	my $filepath = Irssi::get_irssi_dir();
+	my $filename = $filepath . '/mh_cyk.data';
+
+	if ($data_save_timeout)
+	{
+		Irssi::timeout_remove($data_save_timeout);
+		$data_save_timeout = 0;
+	}
+
+    if (open(my $filehandle, '<:encoding(UTF-8)' , $filename))
+    {
+		$list = undef;
+
+        while (my $data = <$filehandle>)
+        {
+            chomp($data);
+
+			if ($data =~ m/(..*);(..*);(..*);(..*);.*/)
+			{
+				my $nick_lc = lc($3);
+
+				$list->{$1}->{$2}->{$nick_lc}->{'nick'}  = $3;
+				$list->{$1}->{$2}->{$nick_lc}->{'count'} = int($4);
+			}
+		}
+
+		close($filehandle);
+	}
+
+	return(1);
+}
+
+sub data_save
+{
+	my $filepath = Irssi::get_irssi_dir();
+
+	make_path($filepath);
+
+	my $filename = $filepath . '/mh_cyk.data';
+
+	if ($data_save_timeout)
+	{
+		Irssi::timeout_remove($data_save_timeout);
+		$data_save_timeout = 0;
+	}
+
+	if (open(my $filehandle, '>:encoding(UTF-8)' , $filename))
+	{
+		for my $server (keys(%{$list}))
+		{
+			for my $channel (keys($list->{$server}))
+			{
+
+				for my $nick_lc (keys($list->{$server}->{$channel}))
+				{
+					my $nick  = $list->{$server}->{$channel}->{$nick_lc}->{'nick'};
+					my $count = $list->{$server}->{$channel}->{$nick_lc}->{'count'};
+
+					print($filehandle $server . ';' . $channel . ';' . $nick . ';' . $count  . ";\n");
+				}
+			}
+		}
+
+		close($filehandle);
+    }
+
+	return(1);
 }
 
 ##############################################################################
@@ -129,6 +212,11 @@ sub signal_message_public_priority_low
 					$list->{$servertag}->{$channelname}->{$nick_lc}->{'count'} = 1;
 				}
 
+				if (not $data_save_timeout)
+				{
+					$data_save_timeout = Irssi::timeout_add_once(5*60000, 'data_save', undef);
+				}
+
 				return(1);
 			}
 
@@ -161,13 +249,31 @@ sub signal_message_public_priority_low
 						}
 					}
 
-					$reply = '[Top 10 drunks on ' . $channelname . ':' . $users . ']'
+					$reply = '[Top 10 drunks on ' . $channelname . ':' . $users . ']';
 				}
 
 				$channel->command('SAY ' . $reply);
 
 				return(1);
 			}
+		}
+	}
+}
+
+sub signal_message_own_public_priority_low
+{
+	my ($server, $data, $target) = @_;
+
+	return(signal_message_public_priority_low($server, $data, $server->{'nick'}, undef, $target));
+}
+
+sub signal_gui_exit_last
+{
+	if ($list)
+	{
+		if ($data_save_timeout)
+		{
+			data_save();
 		}
 	}
 }
@@ -183,6 +289,10 @@ Irssi::settings_add_str('mh_cyk', 'mh_cyk_command_list', '!drunks');
 Irssi::settings_add_str('mh_cyk', 'mh_cyk_channels',     'ircnet/#atw');
 
 Irssi::signal_add_priority('message public', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_priority('message own_public', 'signal_message_own_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_last('gui exit', 'signal_gui_exit_last');
+
+data_load();
 
 1;
 
