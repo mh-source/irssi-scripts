@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_cyk.pl v0.02 (20161018)
+# mh_cyk.pl v0.03 (20161018)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -23,6 +23,9 @@
 # -
 #
 # history:
+#
+#	v0.03 (20161018)
+#		fix 'keys on reference is experimental' warnings
 #
 #	v0.02 (20161018)
 #		accept own messages too
@@ -47,7 +50,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 our %IRSSI   =
 (
 	'name'        => 'mh_cyk',
@@ -56,7 +59,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Oct 18 12:24:05 CEST 2016',
+	'changed'     => 'Tue Oct 18 12:55:54 CEST 2016',
 );
 
 ##############################################################################
@@ -149,10 +152,10 @@ sub data_save
 	{
 		for my $server (keys(%{$list}))
 		{
-			for my $channel (keys($list->{$server}))
+			for my $channel (keys(%{$list->{$server}}))
 			{
 
-				for my $nick_lc (keys($list->{$server}->{$channel}))
+				for my $nick_lc (keys(%{$list->{$server}->{$channel}}))
 				{
 					my $nick  = $list->{$server}->{$channel}->{$nick_lc}->{'nick'};
 					my $count = $list->{$server}->{$channel}->{$nick_lc}->{'count'};
