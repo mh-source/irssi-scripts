@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_cyk.pl v0.04 (20161020)
+# mh_cyk.pl v0.05 (20161020)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -23,6 +23,12 @@
 # -
 #
 # history:
+#
+#	v0.05 (20161020)
+#		much code rearranged neatly and new ugly hacks added
+#		setting command_list changed to exlude ! prefix
+#		setting command_char added (with "!")
+#		setting command_pos (on) to enable/disable !drunks <nick> feature
 #
 #	v0.04 (20161020)
 #		accept match/command on actions too (/me)
@@ -56,7 +62,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 our %IRSSI   =
 (
 	'name'        => 'mh_cyk',
@@ -65,7 +71,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Thu Oct 20 08:30:22 CEST 2016',
+	'changed'     => 'Thu Oct 20 23:38:44 CEST 2016',
 );
 
 ##############################################################################
@@ -105,6 +111,207 @@ sub trim_space
 # script functions
 #
 ##############################################################################
+
+sub list_inc
+{
+	my ($servertag, $channelname, $nick) = @_;
+
+	my $nick_lc = lc($nick);
+
+	if (exists($list->{$servertag}->{$channelname}->{$nick_lc}))
+	{
+		$list->{$servertag}->{$channelname}->{$nick_lc}->{'count'}++;
+
+	} else {
+
+		$list->{$servertag}->{$channelname}->{$nick_lc}->{'nick'}  = $nick;
+		$list->{$servertag}->{$channelname}->{$nick_lc}->{'count'} = 1;
+	}
+
+	if (not $data_save_timeout)
+	{
+		$data_save_timeout = Irssi::timeout_add_once(5*60000, 'data_save', undef);
+	}
+}
+
+sub list_command_toplist
+{
+	my ($servertag, $channelname, $nick) = @_;
+
+	my $count_max = 10;
+	my $reply     = '[Top ' . $count_max . ' drunks';
+	my $channel   = Irssi::server_find_tag($servertag)->channel_find($channelname);
+
+	if (Irssi::settings_get_bool('mh_cyk_show_channelname'))
+	{
+		$reply .= ' on ' . $channel->{'visible_name'};
+	}
+
+	$reply .= ': ';
+
+	if (not exists($list->{$servertag}->{$channelname}))
+	{
+		$reply .= 'No data';
+
+	} else {
+
+		my $count     = 0;
+
+		for my $user (sort { $list->{$servertag}->{$channelname}->{$b}->{'count'} <=>
+		                     $list->{$servertag}->{$channelname}->{$a}->{'count'} }
+                             keys(%{$list->{$servertag}->{$channelname}}))
+		{
+			$count++;
+
+			if ($count > 1)
+			{
+				$reply .= ', '
+			}
+
+
+			my $nickname = $list->{$servertag}->{$channelname}->{$user}->{'nick'};
+
+			if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
+			{
+				$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
+			}
+
+			$reply .= chr(0x02) . $count . '. ' . chr(0x02) . $nickname;
+
+			if (Irssi::settings_get_bool('mh_cyk_show_count'))
+			{
+				$reply .= ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
+			}
+
+			if ($count >= $count_max)
+			{
+				last;
+			}
+		}
+	}
+
+	$reply .= ']';
+
+	$channel->command('SAY ' . $reply);
+
+	return(1);
+}
+
+sub list_command_poslist
+{
+	my ($servertag, $channelname, $nick) = @_;
+
+	($nick, undef) = split(/ /, $nick, 2);
+	$nick = trim_space($nick);
+
+	my $reply   = '[Top drunks position';
+	my $channel = Irssi::server_find_tag($servertag)->channel_find($channelname);
+
+	if ($nick ne '')
+	{
+		$reply .= ' for ' . $nick;
+
+		if (Irssi::settings_get_bool('mh_cyk_show_channelname'))
+		{
+			$reply .= ' on ' . $channel->{'visible_name'};
+		}
+
+		$reply .= ': ';
+
+		if (not exists($list->{$servertag}->{$channelname}))
+		{
+			$reply .= 'No data';
+
+		} elsif (not exists($list->{$servertag}->{$channelname}->{lc($nick)}))
+		{
+			$reply .= 'Not found';
+
+		} else {
+
+			my $found     = 0;
+			my $count     = 0;
+			my $user_prev = '';
+
+			for my $user (sort { $list->{$servertag}->{$channelname}->{$b}->{'count'} <=>
+			                     $list->{$servertag}->{$channelname}->{$a}->{'count'} }
+            	                 keys(%{$list->{$servertag}->{$channelname}}))
+			{
+				$count++;
+
+				if ($found)
+				{
+					my $nickname = $list->{$servertag}->{$channelname}->{$user}->{'nick'};
+
+					if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
+					{
+						$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
+					}
+
+					$reply .= ', ' . chr(0x02) . $count . '. ' . chr(0x02) . $nickname;
+
+					if (Irssi::settings_get_bool('mh_cyk_show_count'))
+					{
+						$reply .= ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
+					}
+
+					last;
+				}
+
+				if (lc($nick) eq $user)
+				{
+					$found = 1;
+
+					if ($user_prev ne '')
+					{
+						my $nickname = $list->{$servertag}->{$channelname}->{$user_prev}->{'nick'};
+
+						if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
+						{
+							$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
+						}
+
+						$reply .= chr(0x02) . ($count - 1) . '. ' . chr(0x02) . $nickname;
+
+						if (Irssi::settings_get_bool('mh_cyk_show_count'))
+						{
+							$reply .= ' (' . $list->{$servertag}->{$channelname}->{$user_prev}->{'count'} . ')';
+						}
+
+						$reply .= ', ';
+					}
+
+					my $nickname = $list->{$servertag}->{$channelname}->{$user}->{'nick'};
+
+					if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
+					{
+						$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
+					}
+
+					$reply .= chr(0x02) . $count . '. ' . $nickname . chr(0x02);
+
+					if (Irssi::settings_get_bool('mh_cyk_show_count'))
+					{
+						$reply .= ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
+					}
+
+				} else {
+
+					$user_prev = $user;
+				}
+			}
+		}
+
+	} else {
+
+		$reply .= ' not found';
+	}
+
+	$reply .= ']';
+
+	$channel->command('SAY ' . $reply);
+
+	return(1);
+}
 
 sub data_load
 {
@@ -187,21 +394,9 @@ sub signal_message_public_priority_low
 {
 	my ($server, $data, $nick, $address, $target) = @_;
 
-	my $command = Irssi::settings_get_str('mh_cyk_match');
-
-	if (not ($data =~ m/.*\b\Q$command\E\b.*/i))
-	{
-		$command = Irssi::settings_get_str('mh_cyk_command_list');
-
-		if (not ($data =~ m/^\Q$command\E.*/i))
-		{
-			return(0);
-		}
-	}
-
-	my $servertag   = lc($server->{'tag'});
-	my $channelname = lc($target);
-	my $nick_lc     = lc($nick);
+	my $servertag    = lc($server->{'tag'});
+	my $channelname  = lc($target);
+	my $match        = Irssi::settings_get_str('mh_cyk_match');
 
 	for my $serverchannel (split(',', Irssi::settings_get_str('mh_cyk_channels')))
 	{
@@ -209,84 +404,32 @@ sub signal_message_public_priority_low
 
 		if ($serverchannel eq $servertag . '/' . $channelname)
 		{
-			if ($command eq Irssi::settings_get_str('mh_cyk_match'))
+			if ($data =~ m/.*\b\Q$match\E\b.*/i)
 			{
-				if (exists($list->{$servertag}->{$channelname}->{$nick_lc}))
-				{
-					$list->{$servertag}->{$channelname}->{$nick_lc}->{'count'} = $list->{$servertag}->{$channelname}->{$nick_lc}->{'count'} + 1;
-
-				} else {
-
-					$list->{$servertag}->{$channelname}->{$nick_lc}->{'nick'} = $nick;
-					$list->{$servertag}->{$channelname}->{$nick_lc}->{'count'} = 1;
-				}
-
-				if (not $data_save_timeout)
-				{
-					$data_save_timeout = Irssi::timeout_add_once(5*60000, 'data_save', undef);
-				}
-
-				return(1);
+				list_inc($servertag, $channelname, $nick);
 			}
 
-			if ($command eq Irssi::settings_get_str('mh_cyk_command_list'))
+			my $command_char = Irssi::settings_get_str('mh_cyk_command_char');
+
+			if ($data =~ m/^\Q$command_char\E(..*)/)
 			{
-				my $channel = $server->channel_find($channelname);
-				my $reply   = '[Top 10 drunks on ' . $channelname . ': Not enough data]';
+				my $command = $1;
+				$match      = lc(Irssi::settings_get_str('mh_cyk_command_list'));
 
-				if (exists($list->{$servertag}->{$channelname}))
+				if ($command =~ m/\Q$match\E\b(.*)/i)
 				{
-					my $users     = '';
-					my $count     = 0;
-					my $count_max = 10;
+					$data = trim_space($1);
 
-					for my $user (sort { $list->{$servertag}->{$channelname}->{$b}->{'count'} <=>
-					                     $list->{$servertag}->{$channelname}->{$a}->{'count'} }
-					                     keys(%{$list->{$servertag}->{$channelname}}))
+					if (($data eq '') or (not Irssi::settings_get_bool('mh_cyk_command_pos')))
 					{
-						if ($count > 0)
-						{
-							$users .= ','
-						}
-
-						$count++;
-
-						my $nickname = $list->{$servertag}->{$channelname}->{$user}->{'nick'};
-
-						if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
-						{
-							$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
-						}
-
-						$users .= ' ' . chr(0x02) . $count . '. ' . chr(0x02) . $nickname;
-
-						if (Irssi::settings_get_bool('mh_cyk_show_count'))
-						{
-							$users .= ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
-						}
-
-						if ($count == $count_max)
-						{
-							break;
-						}
+						return(list_command_toplist($servertag, $channelname));
 					}
 
-					if (Irssi::settings_get_bool('mh_cyk_show_channelname'))
-					{
-
-
-						$reply = '[Top 10 drunks on ' . $channelname . ':' . $users . ']';
-
-					} else {
-
-						$reply = '[Top 10 drunks:' . $users . ']';
-					}
+					return(list_command_poslist($servertag, $channelname, $data));
 				}
-
-				$channel->command('SAY ' . $reply);
-
-				return(1);
 			}
+
+			return(1);
 		}
 	}
 }
@@ -329,9 +472,11 @@ sub signal_gui_exit_last
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_cyk',  'mh_cyk_match',            'cyk');
-Irssi::settings_add_str('mh_cyk',  'mh_cyk_command_list',     '!drunks');
 Irssi::settings_add_str('mh_cyk',  'mh_cyk_channels',         '');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_match',            'cyk');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_command_char',     '!');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_command_list',     'drunks');
+Irssi::settings_add_bool('mh_cyk', 'mh_cyk_command_pos',      1);
 Irssi::settings_add_bool('mh_cyk', 'mh_cyk_no_hilight',       0);
 Irssi::settings_add_bool('mh_cyk', 'mh_cyk_show_channelname', 1);
 Irssi::settings_add_bool('mh_cyk', 'mh_cyk_show_count',       1);
