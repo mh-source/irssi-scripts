@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_cyk.pl v0.03 (20161018)
+# mh_cyk.pl v0.04 (20161020)
 #
 # Copyright (c) 2016  Michael Hansen
 #
@@ -23,6 +23,12 @@
 # -
 #
 # history:
+#
+#	v0.04 (20161020)
+#		accept match/command on actions too (/me)
+#		setting no_hilight to enable/disable not hilighting nicknames (longer than 1 char)
+#		setting show_channelname to enable/disable showing the channelname in the top-list
+#		setting show_count to enable/disable the wordcount next to each nick in top-list
 #
 #	v0.03 (20161018)
 #		fix 'keys on reference is experimental' warnings
@@ -50,7 +56,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_cyk',
@@ -59,7 +65,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Oct 18 12:55:54 CEST 2016',
+	'changed'     => 'Thu Oct 20 08:30:22 CEST 2016',
 );
 
 ##############################################################################
@@ -244,7 +250,20 @@ sub signal_message_public_priority_low
 						}
 
 						$count++;
-						$users .= ' ' . chr(0x02) . $count . '. ' . chr(0x02) . $list->{$servertag}->{$channelname}->{$user}->{'nick'} . ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
+
+						my $nickname = $list->{$servertag}->{$channelname}->{$user}->{'nick'};
+
+						if (Irssi::settings_get_bool('mh_cyk_no_hilight'))
+						{
+							$nickname =~ s/(.)(.*)?/$1\x02\x02$2/;
+						}
+
+						$users .= ' ' . chr(0x02) . $count . '. ' . chr(0x02) . $nickname;
+
+						if (Irssi::settings_get_bool('mh_cyk_show_count'))
+						{
+							$users .= ' (' . $list->{$servertag}->{$channelname}->{$user}->{'count'} . ')';
+						}
 
 						if ($count == $count_max)
 						{
@@ -252,7 +271,16 @@ sub signal_message_public_priority_low
 						}
 					}
 
-					$reply = '[Top 10 drunks on ' . $channelname . ':' . $users . ']';
+					if (Irssi::settings_get_bool('mh_cyk_show_channelname'))
+					{
+
+
+						$reply = '[Top 10 drunks on ' . $channelname . ':' . $users . ']';
+
+					} else {
+
+						$reply = '[Top 10 drunks:' . $users . ']';
+					}
 				}
 
 				$channel->command('SAY ' . $reply);
@@ -263,7 +291,21 @@ sub signal_message_public_priority_low
 	}
 }
 
+sub signal_message_irc_action_priority_low
+{
+	my ($server, $data, $nick, $address, $target) = @_;
+
+	return(signal_message_public_priority_low($server, $data, $nick, $address, $target));
+}
+
 sub signal_message_own_public_priority_low
+{
+	my ($server, $data, $target) = @_;
+
+	return(signal_message_public_priority_low($server, $data, $server->{'nick'}, undef, $target));
+}
+
+sub signal_message_irc_own_action_priority_low
 {
 	my ($server, $data, $target) = @_;
 
@@ -287,13 +329,18 @@ sub signal_gui_exit_last
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_cyk', 'mh_cyk_match',        'cyk');
-Irssi::settings_add_str('mh_cyk', 'mh_cyk_command_list', '!drunks');
-Irssi::settings_add_str('mh_cyk', 'mh_cyk_channels',     'ircnet/#atw');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_match',            'cyk');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_command_list',     '!drunks');
+Irssi::settings_add_str('mh_cyk',  'mh_cyk_channels',         '');
+Irssi::settings_add_bool('mh_cyk', 'mh_cyk_no_hilight',       0);
+Irssi::settings_add_bool('mh_cyk', 'mh_cyk_show_channelname', 1);
+Irssi::settings_add_bool('mh_cyk', 'mh_cyk_show_count',       1);
 
-Irssi::signal_add_priority('message public', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
-Irssi::signal_add_priority('message own_public', 'signal_message_own_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
-Irssi::signal_add_last('gui exit', 'signal_gui_exit_last');
+Irssi::signal_add_priority('message public',         'signal_message_public_priority_low',         Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_priority('message irc action',     'signal_message_irc_action_priority_low',     Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_priority('message own_public',     'signal_message_own_public_priority_low',     Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_priority('message irc own_action', 'signal_message_irc_own_action_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_last('gui exit',                   'signal_gui_exit_last');
 
 data_load();
 
