@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_iline.pl v0.03 (20170312)
+# mh_iline.pl v0.04 (20170312)
 #
 # Copyright (c) 2017  Michael Hansen
 #
@@ -27,6 +27,9 @@
 # limited documentation below you should be able to get it running :)
 #
 # at a minimum you need to set mh_iline_channels as explained under settings
+#
+# per default the client needs to be +v, +h or +o to monitor for commands, this can
+# be disabled with /set mh_iline_require_privs off
 #
 # the default command !iline will react as follows:
 #
@@ -100,6 +103,11 @@
 #
 # history:
 #
+#	v0.04 (20170312)
+#		dont show extended (host) info for PREFIX_ARGUMENT, it likely doesnt match
+#		fixed double signal handlers
+#		added _require_privs default 'on' info to documentation
+#
 #	v0.03 (20170312)
 #		change [M]/[Message] to [P]/[Public] to account for nicks
 #		cleaned up the bitmask parsing in send_line() and put short/long format in one array
@@ -137,7 +145,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_iline',
@@ -146,7 +154,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Sun Mar 12 03:21:34 CET 2017',
+	'changed'     => 'Sun Mar 12 13:55:40 CET 2017',
 );
 
 ##############################################################################
@@ -796,7 +804,7 @@ sub signal_message_public_priority_low
 
 								if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
 								{
-									send_line($channel, $nickname, 'Looking up ' . $data . $extended, PREFIX_ARGUMENT);
+									send_line($channel, $nickname, 'Looking up ' . $data, PREFIX_ARGUMENT);
 								}
 								get_ilines($servertag, $channelname, $nickname, $data);
 							}
@@ -820,7 +828,7 @@ sub signal_message_public_priority_low
 						{
 							if ($command eq 'version')
 							{
-								send_line($channel, $nickname, 'mh_iline.pl v0.03 Copyright (C) 2017  Michael Hansen');
+								send_line($channel, $nickname, 'mh_iline.pl v0.04 Copyright (C) 2017  Michael Hansen');
 								send_line($channel, $nickname, 'IRC frontend to the https://i-line.space IRCnet I-line lookup service by pbl');
 								send_line($channel, $nickname, 'Download for Irssi at https://github.com/mh-source/irssi-scripts');
 								last;
@@ -844,14 +852,6 @@ sub signal_message_own_public_priority_low
 
 	signal_message_public_priority_low($server, $data, $nickname, $address, $target);
 }
-
-Irssi::signal_add('redir mh_iline event 211', 'signal_redir_event_211');
-
-Irssi::signal_add('redir mh_iline event 481', 'signal_redir_event_481');
-
-Irssi::signal_add_priority('message public', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
-
-Irssi::signal_add_priority('message own_public', 'signal_message_own_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
 
 ##############################################################################
 #
