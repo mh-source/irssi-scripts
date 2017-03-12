@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_iline.pl v0.02 (20170311)
+# mh_iline.pl v0.03 (20170312)
 #
 # Copyright (c) 2017  Michael Hansen
 #
@@ -37,9 +37,8 @@
 #
 # the script also (optionally) supports !help and !version both without arguments
 #
-# The prefix codes means where the data/info comes from (eg [M] means the IP was
-# gotten from the requesters message irc host via the message - though for nicks
-# this means its gotten from irssis nick list)
+# The prefix codes means where the data/info comes from (eg [P]/[Public] means the IP was
+# gotten from the requesters irc host, or for nicks from irssis internal nicklist)
 #
 # settings:
 #
@@ -80,7 +79,35 @@
 # mh_iline_show_prefix (bool, default: on):
 #	enable/disable showing prefix data (the [A]/[Argument] etc part)
 #
+# mh_iline_show_extended (bool, default: on):
+#	enable/disable showing extended information in lines
+#
+# mh_iline_hide_processing (bool,  default: off):
+#	dont show '...Processing...' lines at all
+#
+# mh_iline_hide_looking (bool,  default: off):
+#	dont show '...looking up...' lines at all
+#
+# mh_iline_hide_looking_nicks (bool,  default: off):
+#	dont show '...looking up...' for [N]/[Nick] when requested by another user (!iline <nick>)
+#	(if _hide_looking is on, this setting is irrelevant (implied))
+#
+# mh_iline_flood_timeout (int,  default: 60):
+#	allow _flood_count requests in _flood_timeout seconds
+#
+# mh_iline_flood_count (int,  default: 5):
+#	allow _flood_count requests in _flood_timeout seconds
+#
 # history:
+#
+#	v0.03 (20170312)
+#		change [M]/[Message] to [P]/[Public] to account for nicks
+#		cleaned up the bitmask parsing in send_line() and put short/long format in one array
+#		added _show_extended and supporting code
+#		added _hide_processing and supporting code
+#		added _hide_looking and supporting code
+#		added _hide_looking_nicks and supporting code
+#		added simple flood protection via settings _flood_timeout and _flood_count
 #
 #	v0.02 (20170311)
 #		use https instead of http when requesting lookup and changed the url
@@ -110,7 +137,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 our %IRSSI   =
 (
 	'name'        => 'mh_iline',
@@ -119,7 +146,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Sat Mar 11 21:54:07 CET 2017',
+	'changed'     => 'Sun Mar 12 03:21:34 CET 2017',
 );
 
 ##############################################################################
@@ -134,57 +161,54 @@ our $in_progress_channel;
 our $in_progress_nick;
 
 use constant {
-	PREFIX_NONE	    => 0,
-	PREFIX_ARGUMENT => 1,
-	PREFIX_WEBCHAT  => 2,
-	PREFIX_MESSAGE  => 4,
-	PREFIX_STATSL   => 8,
-	PREFIX_NICK     => 16,
-
-	PREFIX_REPLY    => 32,
-	PREFIX_ERROR    => 64,
-
+	PREFIX_NONE	           => 0,
+	PREFIX_ARGUMENT        => 1,
+	PREFIX_WEBCHAT         => 2,
+	PREFIX_PUBLIC          => 4,
+	PREFIX_STATSL          => 8,
+	PREFIX_NICK            => 16,
+	PREFIX_REPLY           => 32,
+	PREFIX_ERROR           => 64,
 	PREFIX_REPLY_TRUNCATED => 128,
 	PREFIX_REPLY_GARBAGE   => 256,
+
+	PREFIX_MAX             => 256,
 };
 
-our @prefix_short =
+our @prefix_array =
 (
-	'' ,
-	'A',
-	'W',
-	'M',
-	'L',
-	'N',
-
-	'<',
-	'!',
-
-	'T',
-	'G',
+	'' , ''         ,
+	'A', 'Argument' ,
+	'W', 'Webchat'  ,
+	'P', 'Public'   ,
+	'L', 'Stats L'  ,
+	'N', 'Nick'     ,
+	'<', 'Reply'    ,
+	'!', 'Error'    ,
+	'T', 'Truncated',
+	'G', 'Garbage'  ,
 );
 
-our @prefix_long =
-(
-	''        ,
-	'Argument',
-	'Webchat' ,
-	'Message' ,
-	'Stats L' ,
-	'Nick'    ,
-
-	'Reply'    ,
-	'Error'    ,
-
-	'Truncated',
-	'Garbage'  ,
-);
+our $floodcount   = 0;
+our $floodtimeout = 0;
 
 ##############################################################################
 #
 # common support functions
 #
 ##############################################################################
+
+sub is_odd
+{
+	my ($number) = @_;
+
+	if ($number % 2 == 1)
+	{
+		return(1);
+	}
+
+	return(0);
+}
 
 sub trim_space
 {
@@ -274,7 +298,6 @@ sub lazy_is_ip
 	}
 
 	return(0);
-
 }
 
 sub hex_to_ip
@@ -315,79 +338,34 @@ sub send_line
 
 			if ($prefixbits)
 			{
-				my @prefix_array;
+				my $prefix_id = 0;
+
+				# even id is short version, uneven id is long version
 
 				if (Irssi::settings_get_bool('mh_iline_show_prefix_long'))
 				{
-					@prefix_array = @prefix_long;
-
-				} else {
-
-					@prefix_array = @prefix_short;
+					$prefix_id++;
 				}
-
-				my $prefix_id = 0;
 
 				$prefix .= '[';
 
-				# order matters here...
+				my $prefixbit = 1;
 
-				$prefix_id++;
-				if ($prefixbits & PREFIX_ARGUMENT)
+				while ($prefixbit <= PREFIX_MAX)
 				{
-					$prefix .= $prefix_array[$prefix_id];
+					$prefix_id += 2;
+					if ($prefixbits & $prefixbit)
+					{
+						$prefix .= $prefix_array[$prefix_id];
+						if (is_odd($prefix_id))
+						{
+							$prefix .= ' ';
+						}
+					}
+					$prefixbit = $prefixbit << 1;
 				}
 
-				$prefix_id++;
-				if ($prefixbits & PREFIX_WEBCHAT)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_MESSAGE)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_STATSL)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_NICK)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_REPLY)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_ERROR)
-				{
-					$prefix .= $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_REPLY_TRUNCATED)
-				{
-					$prefix .= ' ' . $prefix_array[$prefix_id];
-				}
-
-				$prefix_id++;
-				if ($prefixbits & PREFIX_REPLY_GARBAGE)
-				{
-					$prefix .= ' ' . $prefix_array[$prefix_id];
-				}
-
-
-
+				$prefix = trim_space($prefix);
 				$prefix .= '] ';
 			}
 		}
@@ -462,7 +440,14 @@ sub pipe_read
 
 			} else {
 
-				send_line($channel, $nickname, 'No reply', PREFIX_REPLY + PREFIX_ERROR);
+				$reply = 'No reply';
+
+				if (Irssi::settings_get_bool('mh_iline_show_extended'))
+				{
+					$reply .= ' (' . Irssi::settings_get_bool('mh_iline_url') . ')';
+				}
+
+				send_line($channel, $nickname, $reply, PREFIX_REPLY + PREFIX_ERROR);
 			}
 		}
 	}
@@ -523,6 +508,18 @@ sub get_ilines
 
 ##############################################################################
 #
+# irssi timeouts
+#
+##############################################################################
+
+sub timeout_flood_reset
+{
+	$floodcount   = 0;
+	$floodtimeout = 0;
+}
+
+##############################################################################
+#
 # irssi signal handlers
 #
 ##############################################################################
@@ -540,13 +537,32 @@ sub signal_redir_event_211
 			$data =~ s/.*\[.*@(.*)\].*/$1/;
 			$data = lc(trim_space($data));
 
+			my $extended = '';
+
+			if (Irssi::settings_get_bool('mh_iline_show_extended'))
+			{
+				my $nick = $channel->nick_find($in_progress_nick);
+
+				if ($nick)
+				{
+					$extended = ' (' . $nick->{'nick'} . '!' . $nick->{'host'} . ')';
+
+				} else {
+
+					$extended = ' (' . $in_progress_nick . ' not found)';
+				}
+			}
+
 			if (not lazy_is_ip($data))
 			{
-				send_line($channel, $in_progress_nick, 'You do not seem to have an IP', PREFIX_ERROR);
+				send_line($channel, $in_progress_nick, 'You do not seem to have an IP' . $extended, PREFIX_ERROR);
 
 			} else {
 
-				send_line($channel, $in_progress_nick, 'Looking up ' . $data, PREFIX_STATSL);
+				if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+				{
+					send_line($channel, $in_progress_nick, 'Looking up ' . $data . $extended, PREFIX_STATSL);
+				}
 				get_ilines($in_progress_server, $in_progress_channel, $in_progress_nick, $data);
 				return(1);
 			}
@@ -624,6 +640,7 @@ sub signal_message_public_priority_low
 				}
 
 				my $nick = $channel->nick_find($nickname);
+				my $extended = '';
 
 				if ($nick)
 				{
@@ -631,16 +648,57 @@ sub signal_message_public_priority_low
 
 					if ($data =~ s/^\Q$command_char\E//i)
 					{
+						if (not $floodtimeout)
+						{
+							my $timeout = Irssi::settings_get_int('mh_iline_flood_timeout');
+
+							$timeout = int($timeout) * 1000; # timeout in seconds
+
+							if (not $timeout)
+							{
+								$timeout = 60 * 1000; # fallback to 60 seconds
+							}
+
+							$floodtimeout = Irssi::timeout_add_once($timeout, 'timeout_flood_reset', undef);
+							$floodcount = 1;
+
+						} else {
+
+							my $count = Irssi::settings_get_int('mh_iline_flood_count');
+
+							$count = int($count);
+
+							if (not $count)
+							{
+								$count = 5; # fallback to allow 5 requests
+							}
+
+							if ($floodcount > $count)
+							{
+								last;
+							}
+						}
+						$floodcount++;
+
 						(my $command, $data) = split(' ', $data, 2);
 						$command = lc(trim_space($command));
 
 						if ($command eq lc(trim_space(Irssi::settings_get_str('mh_iline_command'))))
 						{
 							$data = trim_space($data);
+							my $extended = '';
+
+							if (Irssi::settings_get_bool('mh_iline_show_extended'))
+							{
+								$extended = ' (' . $nickname . '!' . $address . ')';
+							}
 
 							if ($in_progress < 2) # 'just this once'-hack :)
 							{
-								send_line($channel, $nickname, 'Processing...');
+								if (not Irssi::settings_get_bool('mh_iline_hide_processing'))
+								{
+									send_line($channel, $nickname, 'Processing...');
+								}
 							}
 
 							$in_progress = 1;
@@ -662,7 +720,10 @@ sub signal_message_public_priority_low
 
 											if (lazy_is_ip($hexip))
 											{
-												send_line($channel, $nickname, 'Looking up ' . $hexip, PREFIX_WEBCHAT);
+												if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+												{
+													send_line($channel, $nickname, 'Looking up ' . $hexip . $extended, PREFIX_WEBCHAT);
+												}
 												get_ilines($servertag, $channelname, $nickname, $hexip);
 												last;
 											}
@@ -673,7 +734,10 @@ sub signal_message_public_priority_low
 								if (lazy_is_ip($data))
 								{
 									$data = lc($data);
-									send_line($channel, $nickname, 'Looking up ' . $data, PREFIX_MESSAGE);
+									if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+									{
+										send_line($channel, $nickname, 'Looking up ' . $data . $extended, PREFIX_PUBLIC);
+									}
 									get_ilines($servertag, $channelname, $nickname, $data);
 									last;
 								}
@@ -704,9 +768,17 @@ sub signal_message_public_priority_low
 									{
 										my $selfcommand = trim_space(Irssi::settings_get_str('mh_iline_command_char')) . trim_space(Irssi::settings_get_str('mh_iline_command'));
 
+										if ($floodcount)
+										{
+											$floodcount--; # recursive request isnt counted in flood
+										}
+
 										if (lc($nick->{'nick'}) ne lc($nickname))
 										{
-											send_line($channel, $nickname, 'Looking up ' . $nick->{'nick'}, PREFIX_NICK);
+											if ((not Irssi::settings_get_bool('mh_iline_hide_looking')) and (not Irssi::settings_get_bool('mh_iline_hide_looking_nicks')))
+											{
+												send_line($channel, $nickname, 'Looking up ' . $nick->{'nick'}, PREFIX_NICK);
+											}
 											$in_progress = 0;
 											signal_message_public_priority_low($server, $selfcommand, $nick->{'nick'}, $nick->{'host'}, $target);
 											last;
@@ -722,7 +794,10 @@ sub signal_message_public_priority_low
 									last;
 								}
 
-								send_line($channel, $nickname, 'Looking up ' . $data, PREFIX_ARGUMENT);
+								if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+								{
+									send_line($channel, $nickname, 'Looking up ' . $data . $extended, PREFIX_ARGUMENT);
+								}
 								get_ilines($servertag, $channelname, $nickname, $data);
 							}
 
@@ -745,7 +820,7 @@ sub signal_message_public_priority_low
 						{
 							if ($command eq 'version')
 							{
-								send_line($channel, $nickname, 'mh_iline.pl v0.02 Copyright (C) 2017  Michael Hansen');
+								send_line($channel, $nickname, 'mh_iline.pl v0.03 Copyright (C) 2017  Michael Hansen');
 								send_line($channel, $nickname, 'IRC frontend to the https://i-line.space IRCnet I-line lookup service by pbl');
 								send_line($channel, $nickname, 'Download for Irssi at https://github.com/mh-source/irssi-scripts');
 								last;
@@ -770,6 +845,13 @@ sub signal_message_own_public_priority_low
 	signal_message_public_priority_low($server, $data, $nickname, $address, $target);
 }
 
+Irssi::signal_add('redir mh_iline event 211', 'signal_redir_event_211');
+
+Irssi::signal_add('redir mh_iline event 481', 'signal_redir_event_481');
+
+Irssi::signal_add_priority('message public', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
+
+Irssi::signal_add_priority('message own_public', 'signal_message_own_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
 
 ##############################################################################
 #
@@ -777,19 +859,24 @@ sub signal_message_own_public_priority_low
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_iline', 'mh_iline_channels',         '');
-Irssi::settings_add_str('mh_iline', 'mh_iline_command',          'Iline');
-Irssi::settings_add_str('mh_iline', 'mh_iline_command_char',     '!');
-Irssi::settings_add_int('mh_iline', 'mh_iline_lag_limit',         5);
-Irssi::settings_add_str('mh_iline', 'mh_iline_url',               'https://api.i-line.space/index.php?q=');
-Irssi::settings_add_bool('mh_iline', 'mh_iline_require_privs',    1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_iline',       1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_command_help',     1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_command_version',  1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_test_webchat',     1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix_long', 1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix',      1);
-
+Irssi::settings_add_str('mh_iline', 'mh_iline_channels',            '');
+Irssi::settings_add_str('mh_iline', 'mh_iline_command',             'Iline');
+Irssi::settings_add_str('mh_iline', 'mh_iline_command_char',        '!');
+Irssi::settings_add_int('mh_iline', 'mh_iline_lag_limit',           5);
+Irssi::settings_add_str('mh_iline', 'mh_iline_url',                 'https://api.i-line.space/index.php?q=');
+Irssi::settings_add_bool('mh_iline', 'mh_iline_require_privs',      1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_iline',         1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_help',       1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_version',    1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_test_webchat',       1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix_long',   1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix',        1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_extended',      1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_processing',    0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking',       0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking_nicks', 0);
+Irssi::settings_add_int('mh_iline', 'mh_iline_flood_timeout',       60);
+Irssi::settings_add_int('mh_iline', 'mh_iline_flood_count',         5);
 
 Irssi::Irc::Server::redirect_register('mh_iline stats L',
     1, # remote
