@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_iline.pl v0.05 (20170315)
+# mh_iline.pl v0.06 (20170323)
 #
 # Copyright (c) 2017  Michael Hansen
 #
@@ -22,8 +22,8 @@
 #
 # IRC frontend to the https://i-line.space IRCnet I-line lookup service by pbl
 #
-# Will monitor channel(s) for the !iline command and return a list of IRCnet
-# servers the given user/ip/nick can connect to.
+# Will monitor channel(s) (and optionally private message) for the !iline command
+# and return a list of IRCnet servers the given user/ip/nick can connect to.
 #
 # at a minimum you need to set mh_iline_channels as explained under settings
 # with something like /set mh_iline_channels ircnet/#channel
@@ -71,9 +71,6 @@
 # mh_iline_require_privs (bool, default: on):
 #	require +o, +v or +h to enable monitoring
 #
-# mh_iline_show_iline (bool, default: on):
-#	show the [Iline] prefix on lines sent
-#
 # mh_iline_command_help (bool, default: on):
 #	enable/disable !help support
 #
@@ -111,7 +108,26 @@
 # mh_iline_reply_notice (bool, default: on):
 #	send replies as notices, if off, use regular messages
 #
+# mh_iline_reply_private (bool, default: off):
+#	send replies as notices, if off, use regular messages
+#
+# mh_iline_monitor_private (bool, default: off):
+#	listen for commands in private and send reply in private
+#
+# mh_iline_command_version_short (bool, default: off):
+#	use the short (script name and version only) !version reply
+#
 # history:
+#
+#	v0.06 (20170323)
+#		added _command_version_short for a compact oneline !version reply
+#		added _monitor_private (default off) which will listen for commands in private message and reply privately
+#		added _reply_private (default off) which will make all public !commands reply in private notice/message instead of public
+#		not longer allows spaces between command_char and command ('! help')
+#		lazy_is_hostname now supports punycoded/idn hostnames (not that it matters, we only want ips right now, and its used only to exclude possible ip matches)
+#		setting _show_iline removed, since it now shows the name of whichever command was called and is no longer optional
+#		[Iline] now shows the current issued command instead of script name (to possibly support more commands in the future)
+#		more code cleanup work, lots of spaghetti eaten, might have cooked some new though - i know that promised cleanup is taking its time, sowwy :)
 #
 #	v0.05 (20170315)
 #		some minor code/comment/instructions work
@@ -167,7 +183,7 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 our %IRSSI   =
 (
 	'name'        => 'mh_iline',
@@ -176,7 +192,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Wed Mar 15 08:17:33 CET 2017',
+	'changed'     => 'Thu Mar 23 09:07:56 CET 2017',
 );
 
 ##############################################################################
@@ -185,12 +201,17 @@ our %IRSSI   =
 #
 ##############################################################################
 
-our $in_progress = 0;
-our $in_progress_server;
-our $in_progress_channel;
-our $in_progress_nick;
+our $busy =
+{
+	'busy'    => 0 ,
+	'cmd'     => '',
+	'server'  => '',
+	'channel' => '',
+	'nick'    => '',
+};
 
-use constant {
+use constant
+{
 	PREFIX_NONE	           => 0,
 	PREFIX_ARGUMENT        => 1,
 	PREFIX_WEBCHAT         => 2,
@@ -249,8 +270,8 @@ sub trim_space
 		$string =~ s/^\s+//g;
 		$string =~ s/\s+$//g;
 
-	} else
-	{
+	} else {
+
 		$string = '';
 	}
 
@@ -267,12 +288,14 @@ sub lazy_is_webhost
 {
 	my ($data) = @_;
 
-	if ($data)
+	if (not $data)
 	{
-		if ($data =~ m/^.+\.mibbit\.com$/i)
-		{
-			return(1);
-		}
+		return(0);
+	}
+
+	if ($data =~ m/^.+\.mibbit\.com$/i)
+	{
+		return(1);
 	}
 
 	return(0);
@@ -282,385 +305,640 @@ sub lazy_is_hexip
 {
 	my ($data) = @_;
 
-
-	if ($data)
+	if (not $data)
 	{
-		if ($data =~ m/^[~+\-^=]?[a-f0-9]{8}$/i)
-		{
-			return(1);
-		}
+		return(0);
 	}
 
-	return(0);
+	if (not $data =~ m/^[~+\-^=]?[a-f0-9]{8}$/i)
+	{
+		return(0);
+	}
+
+	return(1);
 }
 
 sub lazy_is_hostname
 {
 	my ($data) = @_;
 
-	if ($data)
+	if (not $data)
 	{
-		if ($data =~ m/^.+\.[a-z]+$/i)
+		return(0);
+	}
+
+	if (not $data =~ m/^.+\.[a-z]+$/i) # any old *something.tld
+	{
+		if (not $data =~ m/^.+\.xn--[a-z0-9-]+$/i) # punycoded
 		{
-			return(1);
+			return(0);
 		}
 	}
 
-	return(0);
+	return(1);
 }
 
 sub lazy_is_ip
 {
 	my ($data) = @_;
 
-	if ($data)
+	if (not $data)
 	{
-		if ($data =~ m/^([a-f0-9.:]){3,45}$/i)
-		{
-			if ($data =~ m/.*[.:].*/i) # require at least one . or : so DEAF is a nick, not an IP
-			{
-				if (not lazy_is_hostname($data))
-				{
-					return(1);
-				}
-			}
-		}
+		return(0);
 	}
 
-	return(0);
+	if (not $data =~ m/^([a-f0-9.:]){3,45}$/i)
+	{
+		return(0);
+	}
+
+	if (not $data =~ m/.*[.:].*/i) # require at least one . or : so DEAF is a nick, not an IP
+	{
+		return(0);
+	}
+
+	if (lazy_is_hostname($data))
+	{
+		return(0);
+	}
+
+	return(1);
 }
 
 sub hex_to_ip
 {
 	my ($data) = @_;
 
-	if ($data)
+	if (not $data)
 	{
-		if ($data =~ m/^[~+\-^=]?([a-f0-9]{8})$/i)
-		{
-			$data = $1;
+		return('');
+	}
 
-			my $oct1 = hex(substr($data, 0, 2));
-			my $oct2 = hex(substr($data, 2, 2));
-			my $oct3 = hex(substr($data, 4, 2));
-			my $oct4 = hex(substr($data, 6, 2));
+	if ($data =~ m/^[~+\-^=]?([a-f0-9]{8})$/i)
+	{
+		$data = $1;
 
-			return($oct1 . "." . $oct2 . "." . $oct3 . "." . $oct4);
-		}
+		my $oct1 = hex(substr($data, 0, 2));
+		my $oct2 = hex(substr($data, 2, 2));
+		my $oct3 = hex(substr($data, 4, 2));
+		my $oct4 = hex(substr($data, 6, 2));
+
+		return($oct1 . "." . $oct2 . "." . $oct3 . "." . $oct4);
 	}
 
 	return('');
 }
 
-sub lag_check
+sub check_flood
+{
+	if (not (Irssi::settings_get_int('mh_iline_flood_timeout') and Irssi::settings_get_int('mh_iline_flood_count')))
+	{
+		return(1);
+	}
+
+	if (not $floodtimeout)
+	{
+		my $timeout = Irssi::settings_get_int('mh_iline_flood_timeout');
+
+		$timeout      = int($timeout) * 1000; # timeout in seconds
+		$floodtimeout = Irssi::timeout_add_once($timeout, 'timeout_flood_reset', undef);
+		$floodcount   = 1;
+
+	} else {
+
+		if ($floodcount > Irssi::settings_get_int('mh_iline_flood_count'))
+		{
+			return(0);
+		}
+	}
+
+	$floodcount++;
+}
+
+sub check_lag
 {
 	my ($server) = @_;
 
 	my $lag_limit = Irssi::settings_get_int('mh_iline_lag_limit');
 
-	if ($lag_limit)
+	if (not $lag_limit)
 	{
-		$lag_limit = $lag_limit * 1000; # seconds to milliseconds
+		return(1);
+	}
 
-		if ($server->{'lag'} >= $lag_limit)
-		{
-			return(0);
-		}
+	$lag_limit = $lag_limit * 1000; # seconds to milliseconds
+
+	if ($server->{'lag'} >= $lag_limit)
+	{
+		return(0);
 	}
 
 	return(1);
 }
 
-sub privs_check
+sub check_privs
 {
 	my ($channel) = @_;
 
-	if (Irssi::settings_get_bool('mh_iline_require_privs'))
+	if (not Irssi::settings_get_bool('mh_iline_require_privs'))
 	{
-		my $nick = $channel->nick_find($channel->{'server'}->{'nick'});
+		return(1);
+	}
 
-		if (not $nick)  
-		{
-			return(0);
-		}
+	my $nick = $channel->nick_find($channel->{'server'}->{'nick'});
 
-		if (not ($nick->{'op'} or $nick->{'voice'} or $nick->{'halfop'}))
-		{
-			return(0);
-		}
+	if (not $nick)
+	{
+		return(0);
+	}
+
+	if (not ($nick->{'op'} or $nick->{'voice'} or $nick->{'halfop'}))
+	{
+		return(0);
 	}
 
 	return(1);
 }
 
-sub flood_check
+sub busy
 {
-	if (Irssi::settings_get_int('mh_iline_flood_timeout') and Irssi::settings_get_int('mh_iline_flood_count'))
+	my ($busyvalue, $command, $server, $channel, $nickname) = @_;
+
+	if (not defined($busyvalue)) # busy();
 	{
-		if (not $floodtimeout)
-		{
-			my $timeout = Irssi::settings_get_int('mh_iline_flood_timeout');
-
-			$timeout      = int($timeout) * 1000; # timeout in seconds
-			$floodtimeout = Irssi::timeout_add_once($timeout, 'timeout_flood_reset', undef);
-			$floodcount   = 1;
-
-		} else {
-
-			if ($floodcount > Irssi::settings_get_int('mh_iline_flood_count'))
-			{
-				return(0);
-			}
-		}
-
-		$floodcount++;
+		return($busy->{'busy'});
 	}
 
-	return(1);
+	$busyvalue = int($busyvalue);
+
+	if (not $busyvalue) # busy(0);
+	{
+		$busy->{'busy'}     = 0;
+		$busy->{'cmd'}      = '';
+		$busy->{'server'}   = '';
+		$busy->{'channel'}  = '';
+		$busy->{'nick'}     = '';
+
+		return($busy->{'busy'});
+	}
+
+	$busy->{'busy'} = $busyvalue;
+
+	if (defined($command))
+	{
+		$busy->{'cmd'} = '' . $command;
+	}
+
+	if (defined($server))
+	{
+		$busy->{'server'} = '' . $server;
+	}
+
+	if (defined($channel))
+	{
+		$busy->{'channel'} = '' . $channel;
+	}
+
+	if (defined($nickname))
+	{
+		$busy->{'nick'} = '' . $nickname;
+	}
+
+	return($busy->{'busy'});
 }
 
 sub send_line
 {
-	my ($channel, $nickname, $data, $prefixbits) = @_;
+	my ($channel, $data, $prefixbits) = @_;
 
-	if (ref($channel) eq 'Irssi::Irc::Channel')
+	if (ref($channel) ne 'Irssi::Irc::Channel')
 	{
-		$data = trim_space($data);
-		my $banner = $nickname . ': ';
-		my $prefix = '';
-
-		if (Irssi::settings_get_bool('mh_iline_show_prefix') and $prefixbits)
+		if (ref($channel) ne 'Irssi::Irc::Server')
 		{
-			$prefixbits = int($prefixbits);
-
-			if ($prefixbits)
-			{
-				my $prefix_id = 0;
-
-				# even id is short version, uneven id is long version (0 is even)
-
-				if (Irssi::settings_get_bool('mh_iline_show_prefix_long'))
-				{
-					$prefix_id++;
-				}
-
-				$prefix .= '[';
-
-				my $prefixbit = 1;
-
-				while ($prefixbits and ($prefixbit <= PREFIX_MAX))
-				{
-					$prefix_id += 2;
-					if ($prefixbits & $prefixbit)
-					{
-						$prefix .= $prefix_array[$prefix_id];
-						if (is_odd($prefix_id))
-						{
-							$prefix .= ' ';
-						}
-						$prefixbits -= $prefixbit; # remove bit from bits
-					}
-					$prefixbit = $prefixbit << 1; # next bit
-				}
-
-				$prefix = trim_space($prefix);
-				$prefix .= '] ';
-			}
+			return(0);
 		}
-
-		if (Irssi::settings_get_bool('mh_iline_show_iline'))
-		{
-			$banner .= '[' . trim_space(Irssi::settings_get_str('mh_iline_command')) . '] ';
-		}
-
-		my $command = 'SAY';
-
-		if (Irssi::settings_get_bool('mh_iline_reply_notice'))
-		{
-			$command = 'NOTICE ' . $channel->{'name'};
-		}
-
-		$channel->command($command . ' ' . $banner . $prefix . $data);
-
-		return(1);
 	}
 
-	return(0);
+	my $prefix  = '';
+	my $banner  = '';
+
+	if (not (Irssi::settings_get_bool('mh_iline_reply_private') or ref($channel) eq 'Irssi::Irc::Server'))
+	{
+		if ($busy->{'nick'} ne '')
+		{
+			$banner .= $busy->{'nick'} . ': ';
+		}
+	}
+
+	if ($busy->{'cmd'} ne '')
+	{
+		$banner .= '[' . $busy->{'cmd'} . '] ';
+	}
+
+	if (not $prefixbits)
+	{
+		$prefixbits = PREFIX_NONE;
+
+	} else {
+
+		$prefixbits = int($prefixbits);
+	}
+
+	if (Irssi::settings_get_bool('mh_iline_show_prefix') and $prefixbits)
+	{
+		my $prefix_id = 0; # even id is short version, uneven id is long version (0 is even)
+
+		if (Irssi::settings_get_bool('mh_iline_show_prefix_long'))
+		{
+			$prefix_id = 1;
+		}
+
+		my $prefixbit = 1;
+
+		while ($prefixbits and ($prefixbit <= PREFIX_MAX))
+		{
+			$prefix_id += 2;
+
+			if ($prefixbits & $prefixbit)
+			{
+				$prefix .= $prefix_array[$prefix_id];
+
+				if (is_odd($prefix_id)) # space between words in long prefix mode
+				{
+					$prefix .= ' ';
+				}
+
+				$prefixbits -= $prefixbit; # remove bit from bits
+			}
+
+			$prefixbit = $prefixbit << 1; # next bit
+		}
+
+		$prefix = '[' . trim_space($prefix) . '] ';
+	}
+
+	my $reply_command = 'MSG ';
+
+	if (Irssi::settings_get_bool('mh_iline_reply_notice'))
+	{
+		$reply_command = 'NOTICE ';
+	}
+
+	if (Irssi::settings_get_bool('mh_iline_reply_private') or (ref($channel) eq 'Irssi::Irc::Server'))
+	{
+		$reply_command .= $busy->{'nick'};
+
+	} else {
+
+		$reply_command .= $channel->{'name'};
+	}
+
+	$reply_command .= ' ';
+
+	$channel->command($reply_command . $banner . $prefix . trim_space($data));
+
+	return(1);
 }
 
-sub pipe_read
+sub ilines_pipe_read
 {
-	my ($readh, $pipetag, $servertag, $channelname, $nickname) = @{$_[0]};
+	my ($readh, $pipetag) = @{$_[0]};
 
-	my $reply = '';
-
+	my $reply      = '';
 	my $read_brake = 3;
 
 	while (my $line = <$readh>)
 	{
-		chomp($line);
-		$line = trim_space($line);
-		$reply = $reply . ' ' . $line;
-		$read_brake--;
-		if (not $read_brake)
+		if (not $read_brake--)
 		{
 			break;
 		}
-	}
 
-	$reply = trim_space($reply);
+		chomp($line);
+		$line  = trim_space($line);
+		$reply = $reply . ' ' . $line;
+	}
 
 	close($readh);
 	Irssi::input_remove($$pipetag);
 
-	my $server = Irssi::server_find_tag($servertag);
+	my $server = Irssi::server_find_tag($busy->{'server'});
 
-	if ($server)
+	if (not $server)
 	{
-		my $channel = $server->channel_find($channelname);
-
-		if ($channel)
-		{
-			if ($reply ne '')
-			{
-				$reply =~ s/<\/?[a-z]+?>//ig; # no more html tags (but allow < >)
-				$reply = trim_space($reply);
-
-				my $prefix = PREFIX_REPLY;
-
-				if (length($reply) > 300)
-				{
-					$reply = trim_space(substr($reply, 0, 300));
-					$prefix += PREFIX_REPLY_TRUNCATED;
-				}
-
-				if ($reply !~ m/^[a-z0-9.:_\-<>,(\/) ]{1,300}$/i) 
-				{
-					$reply =~ s/[^a-z0-9.:_\-<>,(\/) ]*//ig;
-					$reply = trim_space($reply);
-					$prefix += PREFIX_REPLY_GARBAGE;
-				}
-
-				send_line($channel, $nickname, $reply, $prefix);
-
-			} else {
-
-				$reply = 'No reply';
-
-				if (Irssi::settings_get_bool('mh_iline_show_extended'))
-				{
-					$reply .= ' (' . Irssi::settings_get_str('mh_iline_url') . ')';
-				}
-
-				send_line($channel, $nickname, $reply, PREFIX_REPLY + PREFIX_ERROR);
-			}
-		}
+		busy(0);
+		return(0)
 	}
 
-	$in_progress = 0;
-}
+	my $channel = $server->channel_find($busy->{'channel'});
 
-sub get_ilines
-{
-	my ($servertag, $channelname, $nickname, $data) = @_;
-
-	if (pipe(my $readh, my $writeh))
+	if (not $channel)
 	{
-		my $pid = fork();
-
-		if ($pid > 0) 
+		if (lc($busy->{'channel'}) ne lc($busy->{'nick'}))
 		{
-			# parent
-
-			close($writeh);
-			Irssi::pidwait_add($pid);
-
-			my $server = Irssi::server_find_tag($servertag);
-
-			if ($server)
-			{
-				my $channel = $server->channel_find($channelname);
-
-				if ($channel)
-				{
-					my $pipetag;
-					my @args = ($readh, \$pipetag, $servertag, $channelname, $nickname);
-					$pipetag = Irssi::input_add(fileno($readh), Irssi::INPUT_READ, 'pipe_read', \@args);
-				}
-			}
-
-		} else {
-
-			# child
-
-			use LWP::Simple;
-			use POSIX;
-
-			$data = Irssi::settings_get_str('mh_iline_url') . $data;
-
-			my $reply = LWP::Simple::get($data);
-
-			eval
-			{
-				print($writeh $reply);
-				close($writeh);
-			};
-
-			POSIX::_exit(1);
-		}
-	}
-}
-
-sub cmd_version
-{
-	my ($channel, $nickname) = @_;
-
-	if (Irssi::settings_get_bool('mh_iline_command_version'))
-	{
-		if (not flood_check())
-		{
+			busy(0);
 			return(0);
 		}
 
-		send_line($channel, $nickname, 'mh_iline.pl v0.05 Copyright (C) 2017  Michael Hansen');
-		send_line($channel, $nickname, 'IRC frontend to the https://i-line.space IRCnet I-line lookup service by pbl');
-		send_line($channel, $nickname, 'Download for Irssi at https://github.com/mh-source/irssi-scripts');
-
-		return(1);
+		$channel = $server;
 	}
 
-	return(0);
+	$reply = trim_space($reply);
+
+	if ($reply ne '')
+	{
+		$reply =~ s/<\/?[a-z]+?>//ig; # no more html tags (but allow < >)
+		$reply = trim_space($reply);
+
+		my $prefix = PREFIX_REPLY;
+
+		if (length($reply) > 300)
+		{
+			$reply   = trim_space(substr($reply, 0, 300));
+			$prefix += PREFIX_REPLY_TRUNCATED;
+		}
+
+		if ($reply !~ m/^[a-z0-9.:_\-<>,(\/) ]{1,300}$/i)
+		{
+			$reply   =~ s/[^a-z0-9.:_\-<>,(\/) ]*//ig;
+			$reply   = trim_space($reply);
+			$prefix += PREFIX_REPLY_GARBAGE;
+		}
+
+		send_line($channel, $reply, $prefix);
+
+	} else {
+
+		$reply = 'No reply';
+
+		if (Irssi::settings_get_bool('mh_iline_show_extended'))
+		{
+			$reply .= ' (' . Irssi::settings_get_str('mh_iline_url') . ')';
+		}
+
+		send_line($channel, $reply, PREFIX_REPLY + PREFIX_ERROR);
+	}
+
+	busy(0);
+}
+
+sub ilines_get
+{
+	my ($data) = @_;
+
+	my $readh;
+	my $writeh;
+
+	if (not pipe($readh, $writeh))
+	{
+		busy(0);
+		return(0);
+	}
+
+	my $pid = fork();
+
+	if ($pid > 0)
+	{
+		# parent
+
+		close($writeh);
+		Irssi::pidwait_add($pid);
+
+		my $pipetag;
+		my @args = ($readh, \$pipetag);
+		$pipetag = Irssi::input_add(fileno($readh), Irssi::INPUT_READ, 'ilines_pipe_read', \@args);
+
+	} else {
+
+		# child
+
+		use LWP::Simple;
+		use POSIX;
+
+		$data = Irssi::settings_get_str('mh_iline_url') . $data;
+
+		my $reply = LWP::Simple::get($data);
+
+		eval
+		{
+			print($writeh $reply);
+			close($writeh);
+		};
+
+		POSIX::_exit(1);
+	}
+}
+
+sub cmd_iline
+{
+	my ($channel, $nickname, $address, $data) = @_;
+
+	if (not check_flood())
+	{
+		busy(0);
+		return(0);
+	}
+
+	if (busy() < 2) # 'just this once'-hack :)
+	{
+		if (not Irssi::settings_get_bool('mh_iline_hide_processing'))
+		{
+			send_line($channel, 'Processing...');
+		}
+	}
+
+	my $extended = '';
+
+	if (Irssi::settings_get_bool('mh_iline_show_extended'))
+	{
+		$extended = ' (' . $nickname . '!' . $address . ')';
+	}
+
+	$data = trim_space($data);
+
+	if ($data eq '')
+	{
+		(my $hexip, $data) = split('@', $address, 2);
+
+		if (Irssi::settings_get_bool('mh_iline_test_webchat'))
+		{
+			if (lazy_is_webhost($data))
+			{
+				if (lazy_is_hexip($hexip))
+				{
+					$hexip = hex_to_ip($hexip);
+
+					if (lazy_is_ip($hexip))
+					{
+						if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+						{
+							send_line($channel, 'Looking up ' . $hexip . $extended, PREFIX_WEBCHAT);
+						}
+
+						ilines_get($hexip);
+						return(1);
+					}
+				}
+			}
+		}
+
+		if (lazy_is_ip($data))
+		{
+			$data = lc($data);
+
+			if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+			{
+				send_line($channel, 'Looking up ' . $data . $extended, PREFIX_PUBLIC);
+			}
+
+			ilines_get($data);
+			return(1);
+		}
+
+		if (ref($channel) eq 'Irssi::Irc::Channel')
+		{
+			$channel = $channel->{'server'};
+		}
+
+		if (ref($channel) ne 'Irssi::Irc::Server')
+		{
+			busy(0);
+			return(0);
+		}
+
+		$channel->redirect_event('mh_iline stats L',
+			1,         # count
+			$nickname, # arg
+			-1,        # remote
+			'',        # failure signal
+			{          # signals
+				'event 211' => 'redir mh_iline event 211', # RPL_STATSLINKINFO
+				'event 481' => 'redir mh_iline event 481', # ERR_NOPRIVILEGES
+				''          => 'event empty',
+			}
+   		);
+
+		$channel->send_raw('STATS L ' . $nickname);
+		return(1);
+
+	} else {
+
+		$data = lc($data);
+
+		if (not lazy_is_ip($data))
+		{
+			my $nick = '';
+
+			if (ref($channel) eq 'Irssi::Irc::Channel')
+			{
+				$nick = $channel->nick_find($data);
+			}
+
+			if (ref($nick) ne 'Irssi::Irc::Nick')
+			{
+				send_line($channel, 'Not an IP(4/6) address or nickname ', PREFIX_ERROR);
+				busy(0);
+				return(1);
+			}
+
+			if ($floodcount)
+			{
+				$floodcount--; # recursive request isnt counted in flood
+			}
+
+			if (lc($nick->{'nick'}) eq lc($nickname))
+			{
+				busy(2); # 'just this once'-hack :) - to avoid printing processing... twice if $nick is yourself
+				return(cmd_iline($channel, $nickname, $address, ''));
+			}
+
+			if (not (Irssi::settings_get_bool('mh_iline_hide_looking') or Irssi::settings_get_bool('mh_iline_hide_looking_nicks')))
+			{
+				send_line($channel, 'Looking up ' . $nick->{'nick'}, PREFIX_NICK);
+			}
+
+			if (not Irssi::settings_get_bool('mh_iline_reply_private'))
+			{
+				busy(busy(), undef, undef, undef, $nick->{'nick'});
+			}
+			return(cmd_iline($channel, $nick->{'nick'}, $nick->{'host'}, ''));
+		}
+
+		if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+		{
+			send_line($channel, 'Looking up ' . $data, PREFIX_ARGUMENT);
+		}
+
+		ilines_get($data);
+		return(1);
+	}
 }
 
 sub cmd_help
 {
-	my ($channel, $nickname) = @_;
+	my ($channel) = @_;
 
-	if (Irssi::settings_get_bool('mh_iline_command_help'))
+	if (not Irssi::settings_get_bool('mh_iline_command_help'))
 	{
-		if (not flood_check())
-		{
-			return(0);
-		}
-
-		my $command_char = Irssi::settings_get_str('mh_iline_command_char');
-		my $command      = lc(trim_space(Irssi::settings_get_str('mh_iline_command')));
-
-		if (Irssi::settings_get_bool('mh_iline_command_version'))
-		{
-			send_line($channel, $nickname, 'Commands: ' . $command_char . $command . ', ' . $command_char . 'help' . ' & ' . $command_char . 'version' );
-
-		} else {
-
-			send_line($channel, $nickname, 'Commands: ' . $command_char . $command . ' & ' . $command_char . 'help');
-		}
-
-		send_line($channel, $nickname, 'Syntax  : ' . $command_char . $command . ' [<IP(4/6)>|<nickname>]');
-
-		return(1)
+		busy(0);
+		return(0);
 	}
 
-	return(0);
+	if (not check_flood())
+	{
+		busy(0);
+		return(0);
+	}
+
+	my $command_char = Irssi::settings_get_str('mh_iline_command_char');
+	my $command      = lc(trim_space(Irssi::settings_get_str('mh_iline_command')));
+
+	if (Irssi::settings_get_bool('mh_iline_command_version'))
+	{
+		send_line($channel, 'Commands: ' . $command_char . $command . ', ' . $command_char . 'help' . ' & ' . $command_char . 'version' );
+
+	} else {
+
+		send_line($channel, 'Commands: ' . $command_char . $command . ' & ' . $command_char . 'help');
+	}
+
+	send_line($channel, 'Syntax  : ' . $command_char . $command . ' [<IP(4/6)>|<nickname>]');
+
+	busy(0);
+	return(1)
+}
+
+sub cmd_version
+{
+	my ($channel) = @_;
+
+	if (not Irssi::settings_get_bool('mh_iline_command_version'))
+	{
+		busy(0);
+		return(0);
+	}
+
+	if (not check_flood())
+	{
+		busy(0);
+		return(0);
+	}
+
+	my $line = 'mh_iline.pl v0.06';
+
+	if (Irssi::settings_get_bool('mh_iline_command_version_short'))
+	{
+		send_line($channel, $line);
+
+	} else {
+
+		send_line($channel, $line . ' Copyright (C) 2017  Michael Hansen');
+		send_line($channel, 'IRC frontend to the https://i-line.space IRCnet I-line lookup service by pbl');
+		send_line($channel, 'Download for Irssi at https://github.com/mh-source/irssi-scripts');
+	}
+
+	busy(0);
+	return(1);
 }
 
 ##############################################################################
@@ -685,277 +963,201 @@ sub signal_redir_event_211
 {
 	my ($server, $data, $sender) = @_;
 
-	if (lc($server->{'tag'}) eq lc($in_progress_server))
+	if (lc($server->{'tag'}) ne lc($busy->{'server'}))
 	{
-		my $channel = $server->channel_find($in_progress_channel);
+		return(0);
+	}
 
-		if ($channel)
+	my $channel = $server->channel_find($busy->{'channel'});
+
+	if (ref($channel) ne 'Irssi::Irc::Channel')
+	{
+		$channel = $server;
+	}
+
+	my $extended_statsl = $data;
+	$data               =~ s/.*\[.*@(.*)\].*/$1/; # ip/hostname part of stats L/l
+	$data               = lc(trim_space($data));
+	my $extended        = '';
+
+	if (Irssi::settings_get_bool('mh_iline_show_extended'))
+	{
+		if (ref($channel) eq 'Irssi::Irc::Channel')
 		{
-			my $extended_statsl = $data;
-			$data =~ s/.*\[.*@(.*)\].*/$1/;
-			$data = lc(trim_space($data));
+			my $nick = $channel->nick_find($busy->{'nick'});
 
-			my $extended = '';
-
-			if (Irssi::settings_get_bool('mh_iline_show_extended'))
+			if ($nick)
 			{
-				my $nick = $channel->nick_find($in_progress_nick);
-
-				if ($nick)
-				{
-					$extended = ' (' . $nick->{'nick'} . '!' . $nick->{'host'} . ')';
-
-				} else {
-
-					$extended = ' (' . $in_progress_nick . ' not found)';
-				}
-			}
-
-			if (not lazy_is_ip($data))
-			{
-				send_line($channel, $in_progress_nick, 'You do not seem to have an IP' . $extended, PREFIX_ERROR);
-
-				if (Irssi::settings_get_bool('mh_iline_show_extended'))
-				{
-					my $nickname     = lc($server->{'nick'});
-					$extended_statsl =~ s/^(\Q$nickname\E\s+)?(.*)/$2/i; # strip prefixed (own) nickname if present
-
-					$extended_statsl = trim_space($extended_statsl);
-
-					send_line($channel, $in_progress_nick, 'Stats L reply: ' . $extended_statsl, PREFIX_ERROR);
-				}
+				$extended = ' (' . $nick->{'nick'} . '!' . $nick->{'host'} . ')';
 
 			} else {
 
-				if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
-				{
-					send_line($channel, $in_progress_nick, 'Looking up ' . $data . $extended, PREFIX_STATSL);
-				}
-
-				get_ilines($in_progress_server, $in_progress_channel, $in_progress_nick, $data);
-				return(1);
+				$extended = ' (' . $busy->{'nick'} . ' not found)';
 			}
 		}
-
-		$in_progress = 0;
 	}
+
+	if (not lazy_is_ip($data))
+	{
+		send_line($channel, 'You do not seem to have an IP' . $extended, PREFIX_ERROR);
+
+		if (Irssi::settings_get_bool('mh_iline_show_extended'))
+		{
+			my $nickname     = lc($server->{'nick'});
+			$extended_statsl =~ s/^(\Q$nickname\E\s+)?(.*)/$2/i; # strip prefixed (own) nickname if present
+			$extended_statsl = trim_space($extended_statsl);
+			send_line($channel, 'Stats L reply: ' . $extended_statsl, PREFIX_ERROR);
+		}
+
+		busy(0);
+		return(0);
+	}
+
+	if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
+	{
+		send_line($channel, 'Looking up ' . $data . $extended, PREFIX_STATSL);
+	}
+
+	ilines_get($data);
 }
 
 sub signal_redir_event_481
 {
 	my ($server, $data, $sender) = @_;
 
-	$in_progress = 0;
+	if (lc($server->{'tag'}) ne lc($busy->{'server'}))
+	{
+		return(0);
+	}
+
+	busy(0);
+	return(1);
 }
 
 sub signal_message_public_priority_low
 {
 	my ($server, $data, $nickname, $address, $target) = @_;
 
-	if($in_progress)
+	if(busy())
 	{
-		if ($in_progress < 2) # 'just this once'-hack :)
+		return(0);
+	}
+
+	if (not check_lag($server))
+	{
+		return(0);
+	}
+
+	if (not $target)
+	{
+		# there was an api change in irssi signal 'message private' sometime after v0.8.15 (20100403 1617)
+		# the $target field was added, to support those older versions we add it if missing
+		$target = $server->{'nick'};
+	}
+
+	if (Irssi::settings_get_bool('mh_iline_monitor_private') and (lc($target) eq lc($server->{'nick'})))
+	{
+		# yeah, this is copied from below, will detangle later :-)
+		my $command_char = Irssi::settings_get_str('mh_iline_command_char');
+
+		if (not ($data =~ s/^(\Q$command_char\E)([^\s]+)/$2/i))
 		{
 			return(0);
 		}
-	}
 
-	if ($in_progress < 2) # 'just this once'-hack :)
-	{
-		if (not lag_check($server))
+		(my $command, $data) = split(' ', $data, 2);
+		$command = lc(trim_space($command));
+
+		if (not $command)
 		{
 			return(0);
 		}
+
+		if ($command eq lc(trim_space(Irssi::settings_get_str('mh_iline_command'))))
+		{
+			busy(1, 'Iline', $server->{'tag'}, $nickname, $nickname);
+			cmd_iline($server, $nickname, $address, $data);
+			return(1);
+		}
+
+		if ($command eq 'help')
+		{
+			busy(1, 'Help', $server->{'tag'}, $nickname, $nickname);
+			cmd_help($server);
+			return(1);
+		}
+
+		if ($command eq 'version')
+		{
+			busy(1, 'Version', $server->{'tag'}, $nickname, $nickname);
+			cmd_version($server);
+			return(1);
+		}
+
+		return(0);
 	}
 
-	my $servertag   = lc($server->{'tag'});
-	my $channelname = lc($target);
-
-	for my $serverchannel (split(',', Irssi::settings_get_str('mh_iline_channels')))
+	for my $serverchannel (split(',', lc(Irssi::settings_get_str('mh_iline_channels'))))
 	{
-		$serverchannel = lc(trim_space($serverchannel));
-
-		if ($serverchannel eq $servertag . '/' . $channelname)
+		if (trim_space($serverchannel) ne lc($server->{'tag'} . '/' . $target))
 		{
-			my $channel = $server->channel_find($channelname);
+			next;
+		}
 
-			if ($channel)
-			{
-				if (not $channel->{'synced'})
-				{
-					last;
-				}
+		my $channel = $server->channel_find($target);
 
-				if (not privs_check($channel))
-				{
-					last;
-				}
-
-				my $nick = $channel->nick_find($nickname);
-
-				if ($nick)
-				{
-					my $command_char = Irssi::settings_get_str('mh_iline_command_char');
-
-					if ($data =~ s/^\Q$command_char\E//i)
-					{
-						(my $command, $data) = split(' ', $data, 2);
-						$command = lc(trim_space($command));
-
-						if (not $command)
-						{
-							last;
-						}
-
-						if ($command eq lc(trim_space(Irssi::settings_get_str('mh_iline_command'))))
-						{
-							if (not flood_check())
-							{
-								last;
-							}
-
-							if ($in_progress < 2) # 'just this once'-hack :)
-							{
-								if (not Irssi::settings_get_bool('mh_iline_hide_processing'))
-								{
-									send_line($channel, $nickname, 'Processing...');
-								}
-							}
-
-							$in_progress         = 1;
-							$in_progress_server  = $servertag;
-							$in_progress_channel = $channelname;
-							$in_progress_nick    = $nickname;
-
-							my $extended = '';
-
-							if (Irssi::settings_get_bool('mh_iline_show_extended'))
-							{
-								$extended = ' (' . $nickname . '!' . $address . ')';
-							}
-
-							$data = trim_space($data);
-
-							if ($data eq '')
-							{
-								(my $hexip, $data) = split ('@', $address, 2);
-
-								if (Irssi::settings_get_bool('mh_iline_test_webchat'))
-								{
-									if (lazy_is_webhost($data))
-									{
-										if (lazy_is_hexip($hexip))
-										{
-											$hexip = hex_to_ip($hexip);
-
-											if (lazy_is_ip($hexip))
-											{
-												if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
-												{
-													send_line($channel, $nickname, 'Looking up ' . $hexip . $extended, PREFIX_WEBCHAT);
-												}
-
-												get_ilines($servertag, $channelname, $nickname, $hexip);
-												last;
-											}
-										}
-									}
-								}
-
-								if (lazy_is_ip($data))
-								{
-									$data = lc($data);
-
-									if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
-									{
-										send_line($channel, $nickname, 'Looking up ' . $data . $extended, PREFIX_PUBLIC);
-									}
-
-									get_ilines($servertag, $channelname, $nickname, $data);
-									last;
-								}
-
-								$server->redirect_event('mh_iline stats L',
-									1,         # count
-									$nickname, # arg
-									-1,        # remote
-									'',        # failure signal
-									{          # signals
-										'event 211' => 'redir mh_iline event 211', # RPL_STATSLINKINFO
-										'event 481' => 'redir mh_iline event 481', # ERR_NOPRIVILEGES
-										''          => 'event empty',
-									}
-                        		);
-
-								$server->send_raw('STATS L ' . $nickname);
-
-							} else {
-
-								$data = lc($data);
-
-								if (not lazy_is_ip($data))
-								{
-									$nick = $channel->nick_find($data);
-
-									if ($nick)
-									{
-										my $selfcommand = trim_space(Irssi::settings_get_str('mh_iline_command_char')) . trim_space(Irssi::settings_get_str('mh_iline_command'));
-
-										if ($floodcount)
-										{
-											$floodcount--; # recursive request isnt counted in flood
-										}
-
-										if (lc($nick->{'nick'}) ne lc($nickname))
-										{
-											if ((not Irssi::settings_get_bool('mh_iline_hide_looking')) and (not Irssi::settings_get_bool('mh_iline_hide_looking_nicks')))
-											{
-												send_line($channel, $nickname, 'Looking up ' . $nick->{'nick'}, PREFIX_NICK);
-											}
-
-											$in_progress = 0;
-											signal_message_public_priority_low($server, $selfcommand, $nick->{'nick'}, $nick->{'host'}, $target);
-											last;
-										}
-
-										$in_progress = 2; # 'just this once'-hack :) - to avoid printing processing... twice if $nick is yourself
-										signal_message_public_priority_low($server, $selfcommand, $nick->{'nick'}, $nick->{'host'}, $target);
-										last;
-									}
-
-									send_line($channel, $nickname, 'Not an IP(4/6) address or nickname', PREFIX_ERROR);
-									$in_progress = 0;
-									last;
-								}
-
-								if (not Irssi::settings_get_bool('mh_iline_hide_looking'))
-								{
-									send_line($channel, $nickname, 'Looking up ' . $data, PREFIX_ARGUMENT);
-								}
-
-								get_ilines($servertag, $channelname, $nickname, $data);
-							}
-
-							last;
-						}
-
-						if ($command eq 'help')
-						{
-							cmd_help($channel, $nickname);
-							last;
-						}
-
-						if ($command eq 'version')
-						{
-							cmd_version($channel, $nickname);
-							last;
-						}
-					}
-				}
-			}
-
+		if (not $channel)
+		{
 			last;
 		}
+
+		if (not $channel->{'synced'})
+		{
+			last;
+		}
+
+		if (not check_privs($channel))
+		{
+			last;
+		}
+
+		my $command_char = Irssi::settings_get_str('mh_iline_command_char');
+
+		if (not ($data =~ s/^(\Q$command_char\E)([^\s]+)/$2/i))
+		{
+			last;
+		}
+
+		(my $command, $data) = split(' ', $data, 2);
+		$command = lc(trim_space($command));
+
+		if (not $command)
+		{
+			last;
+		}
+
+		if ($command eq lc(trim_space(Irssi::settings_get_str('mh_iline_command'))))
+		{
+			busy(1, 'Iline', $channel->{'server'}->{'tag'}, $channel->{'name'}, $nickname);
+			cmd_iline($channel, $nickname, $address, $data);
+			last;
+		}
+
+		if ($command eq 'help')
+		{
+			busy(1, 'Help', $channel->{'server'}->{'tag'}, $channel->{'name'}, $nickname);
+			cmd_help($channel);
+			last;
+		}
+
+		if ($command eq 'version')
+		{
+			busy(1, 'Version', $channel->{'server'}->{'tag'}, $channel->{'name'}, $nickname);
+			cmd_version($channel);
+			last;
+		}
+
+		last;
 	}
 }
 
@@ -972,25 +1174,29 @@ sub signal_message_own_public_priority_low
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_iline', 'mh_iline_channels',            '');
-Irssi::settings_add_str('mh_iline', 'mh_iline_command',             'Iline');
-Irssi::settings_add_str('mh_iline', 'mh_iline_command_char',        '!');
-Irssi::settings_add_int('mh_iline', 'mh_iline_lag_limit',           5);
-Irssi::settings_add_str('mh_iline', 'mh_iline_url',                 'https://api.i-line.space/index.php?q=');
-Irssi::settings_add_bool('mh_iline', 'mh_iline_require_privs',      1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_iline',         1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_command_help',       1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_command_version',    1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_test_webchat',       1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix_long',   1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix',        1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_show_extended',      1);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_processing',    0);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking',       0);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking_nicks', 0);
-Irssi::settings_add_int('mh_iline', 'mh_iline_flood_timeout',       60);
-Irssi::settings_add_int('mh_iline', 'mh_iline_flood_count',         5);
-Irssi::settings_add_bool('mh_iline', 'mh_iline_reply_notice',       1);
+Irssi::settings_add_str('mh_iline', 'mh_iline_channels',               '');
+Irssi::settings_add_str('mh_iline', 'mh_iline_command_char',           '!');
+Irssi::settings_add_int('mh_iline', 'mh_iline_lag_limit',              5);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_require_privs',         1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_help',          1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_version',       1);
+Irssi::settings_add_str('mh_iline', 'mh_iline_command',                'Iline');
+Irssi::settings_add_str('mh_iline', 'mh_iline_url',                    'https://api.i-line.space/index.php?q=');
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix_long',      1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_prefix',           1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_show_extended',         1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_processing',       0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking',          0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_hide_looking_nicks',    0);
+Irssi::settings_add_int('mh_iline', 'mh_iline_flood_timeout',          60);
+Irssi::settings_add_int('mh_iline', 'mh_iline_flood_count',            5);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_test_webchat',          1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_reply_notice',          1);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_reply_private',         0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_monitor_private',       0);
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_version_short', 0);
+
+Irssi::settings_remove('mh_iline_show_iline');
 
 Irssi::Irc::Server::redirect_register('mh_iline stats L',
     1, # remote
@@ -1009,6 +1215,7 @@ Irssi::signal_add('redir mh_iline event 211', 'signal_redir_event_211');
 Irssi::signal_add('redir mh_iline event 481', 'signal_redir_event_481');
 Irssi::signal_add_priority('message public', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
 Irssi::signal_add_priority('message own_public', 'signal_message_own_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
+Irssi::signal_add_priority('message private', 'signal_message_public_priority_low', Irssi::SIGNAL_PRIORITY_LOW + 1);
 
 1;
 
