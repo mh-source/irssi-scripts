@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_hilog.pl v1.09 (20160208)
+# mh_hilog.pl v1.10 (20170424)
 #
-# Copyright (c) 2015, 2016  Michael Hansen
+# Copyright (c) 2015-2017  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -51,28 +51,40 @@
 #
 # history:
 #
+#	v1.10 (20170424)
+#		added 'sbitems' to irssi header for better scriptassist.pl support (github issue #1)
+#
 #	v1.09 (20160208)
 #		minor comment change
+#
 #	v1.08 (20151230)
 #		now ignores whitespace around _ignore entries
 #		code cleanup
+#
 #	v1.07 (20151223)
 #		added changed field to irssi header
 #		added _strip_colours and supporting code
+#
 #	v1.06 (20151212)
 #		added indents to /help
+#
 #	v1.05 (20151209)
 #		now saving the hilog to a file, so they are still there after a restart
+#
 #	v1.04 (20151205)
 #		month in timestamps were off by one, fixed
+#
 #	v1.03 (20151204)
 #		added _ignore and supporting code
+#
 #	v1.02 (20151201)
 #		added /help
 #		added mh_hilog_show_refnum/mh_hilog_show_network and supporting code
 #		will now print if the log is empty when doing /hilog
+#
 #	v1.01 (20151201)
 #		added setting mh_hilog_prefix
+#
 #	v1.00 (20151130)
 #		initial release
 #
@@ -91,7 +103,7 @@ use File::Path qw(make_path remove_tree);
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.09';
+our $VERSION = '1.10';
 our %IRSSI   =
 (
 	'name'        => 'mh_hilog',
@@ -100,7 +112,8 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Mon Feb  8 17:55:47 CET 2016',
+	'changed'     => 'Mon Apr 24 11:24:35 CEST 2017',
+	'sbitems'     => 'mh_sbhilog',
 );
 
 ##############################################################################
@@ -273,10 +286,14 @@ sub signal_print_text
 	}
 }
 
+Irssi::signal_add('print text', 'signal_print_text');
+
 sub signal_setup_changed_last
 {
 	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
+
+Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
 
 sub signal_gui_exit_last
 {
@@ -288,6 +305,8 @@ sub signal_gui_exit_last
 
 	hilog_save();
 }
+
+Irssi::signal_add_last('gui exit', 'signal_gui_exit_last');
 
 ##############################################################################
 #
@@ -316,6 +335,8 @@ sub command_hilog
 	Irssi::statusbar_items_redraw('mh_sbhilog');
 }
 
+Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
+
 sub command_help
 {
 	my ($data, $server, $windowitem) = @_;
@@ -335,6 +356,8 @@ sub command_help
 		Irssi::signal_stop();
 	}
 }
+
+Irssi::command_bind('help', 'command_help');
 
 ##############################################################################
 #
@@ -356,6 +379,8 @@ sub statusbar_hilog
 	$statusbaritem->default_handler($get_size_only, '{sb ' . $format . '}', '', 0);
 }
 
+Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
+
 ##############################################################################
 #
 # script on load
@@ -368,16 +393,8 @@ Irssi::settings_add_bool('mh_hilog', 'mh_hilog_show_refnum',   1);
 Irssi::settings_add_bool('mh_hilog', 'mh_hilog_strip_colours', 0);
 Irssi::settings_add_str('mh_hilog',  'mh_hilog_ignore',        '');
 
-Irssi::statusbar_item_register('mh_sbhilog', '', 'statusbar_hilog');
-
-Irssi::signal_add('print text',         'signal_print_text');
-Irssi::signal_add_last('setup changed', 'signal_setup_changed_last');
-Irssi::signal_add_last('gui exit',      'signal_gui_exit_last');
-
-Irssi::command_bind('hilog', 'command_hilog', 'mh_hilog');
-Irssi::command_bind('help',  'command_help');
-
 hilog_scan();
+
 
 1;
 
