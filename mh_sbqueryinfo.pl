@@ -1,8 +1,8 @@
 ##############################################################################
 #
-# mh_sbqueryinfo.pl v1.11 (20160105)
+# mh_sbqueryinfo.pl v1.12 (20170424)
 #
-# Copyright (c) 2015, 2016  Michael Hansen
+# Copyright (c) 2015-2017  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software
 # for any purpose with or without fee is hereby granted, provided
@@ -162,39 +162,52 @@
 # through on this idea
 #
 # history:
+#
+#	v1.12 (20170424)
+#		no longer prints empty lines in /whoq when no data is available
+#		added 'sbitems' to irssi header for better scriptassist.pl support (github issue #1)
+#
 #	v1.11 (20160105)
 #		added _whoq_detail_iline and supporting code
 #		added _query_on_notify, _query_on_notify_network, _query_on_notify_active, _query_on_notify_no_act  and supporting code
+#
 #	v1.10 (20160103)
 #		other minor changes to make it react faster under certain circumstances
 #		now prints quit-reason in whowas /whoq if it is known
 #		added _whoq_when_away and supporting code
 #		added _whoq_on_offline and supporting code
 #		now shows old whois information in /whoq of quit users, if known
+#
 #	v1.09 (20160102)
 #		added _idle_longformat, _detail_idle_longformat and whoq_idle_longformat and supporting code
 #		fixed a bug in the idletime display
+#
 #	v1.08 (20160101)
 #		now reacts to a user coming back online and messaging you, setting them online
 #		no longer prints /whoq in every query on script load
 #		added _strip_realname and supporting code
 #		realname is now sanitised before being printed in the statusbar
+#
 #	v1.07 (20151229)
 #		small fix to timestring output, it didnt always show correctly
+#
 #	v1.06 (20151228)
 #		now reacts faster on notifylist changes
 #		added days and weeks to idletime display
 #		fixed issue with numerics containing :
 #		now prints "is no longer idle" before the message that triggers unidle
 #		code cleanup
+#
 #	v1.05 (20151221)
 #		show "is idle/no longer idle" regardless of their away status
 #		show idletime in /whoq even if it is 0
 #		fixed /whoq to work on query instead of active window
 #		added _whoq_on_create and supporting code
+#
 #	v1.04 (20151220)
 #		added _no_act_* and supporting code
 #		code cleanup and commenting
+#
 #	v1.03 (20151219)
 #		added _silent_when_away and supporting code
 #		clear some query variables when user goes offline ('gone', 'oper', etc)
@@ -203,6 +216,7 @@
 #		will now speed up checking of known active queries which are idle
 #		added _show_idle_here_time and supporting code
 #		fixed whowas so it only returns 1 reply, removed old filterting code
+#
 #	v1.02 (20151219)
 #		will now speed up checking of queries known to have quit
 #		now tracks when query nicknames change
@@ -211,9 +225,11 @@
 #		now printe "(shared)" when a join/part is a shared channel
 #		no longer prints "is idle" if the user is also away
 #		removed "channel join" spam for every channel a nick is on when creating query
+#
 #	v1.01 (20151218)
 #		now updates statusbar item correctly when setup changes
 #		added _show_detail_realname and supporting code
+#
 #	v1.00 (20151218)
 #		initial release
 #
@@ -231,7 +247,7 @@ use strict;
 use Irssi 20100403;
 use Irssi::TextUI;
 
-our $VERSION = '1.11';
+our $VERSION = '1.12';
 our %IRSSI   =
 (
 	'name'        => 'mh_sbqueryinfo',
@@ -240,7 +256,8 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Tue Jan  5 09:18:56 CET 2016',
+	'changed'     => 'Mon Apr 24 12:05:13 CEST 2017',
+	'sbitems'     => 'mh_sbqueryinfo',
 );
 
 ##############################################################################
@@ -1774,24 +1791,36 @@ sub command_whoq
 						#
 						# print cached whois information
 						#
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user', $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'userhost'});
-
-
-						if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+						if ($queries->{$servertag}->{$nickname}->{'userhost'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}));
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user', $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'userhost'});
+						}
 
-						} else
+
+						if ($queries->{$servertag}->{$nickname}->{'realname'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', $queries->{$servertag}->{$nickname}->{'realname'});
+							if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'realname'}));
+
+							} else
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname', $queries->{$servertag}->{$nickname}->{'realname'});
+							}
 						}
 
 						if (Irssi::settings_get_bool('mh_sbqueryinfo_detail_iline'))
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_ident', ident_prefix_str($queries->{$servertag}->{$nickname}->{'userhost'}));
+							if ($queries->{$servertag}->{$nickname}->{'userhost'} ne '')
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_ident', ident_prefix_str($queries->{$servertag}->{$nickname}->{'userhost'}));
+							}
 						}
 
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server', $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+						if ($queries->{$servertag}->{$nickname}->{'servername'} ne '')
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server', $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+						}
 
 						if ($queries->{$servertag}->{$nickname}->{'signon'})
 						{
@@ -1832,36 +1861,51 @@ sub command_whoq
 							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_gone', $queries->{$servertag}->{$nickname}->{'gone_reason'});
 						}
 
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_idle', time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_whoq_idle_longformat')));
+						if ($queries->{$servertag}->{$nickname}->{'idle'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_idle', time_string($queries->{$servertag}->{$nickname}->{'idle'}, Irssi::settings_get_bool('mh_sbqueryinfo_whoq_idle_longformat')));
+						}
 
 					} else {
 
 						#
 						# print cached whowas information
 						#
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user_whowas', $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'whowas_userhost'});
-
-						if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+						if ($queries->{$servertag}->{$nickname}->{'whowas_userhost'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname_whowas', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'whowas_realname'}));
-
-						} else
-						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname_whowas', $queries->{$servertag}->{$nickname}->{'whowas_realname'});
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_user_whowas', $windowitem->{'name'}, $queries->{$servertag}->{$nickname}->{'whowas_userhost'});
 						}
 
-						if (Irssi::settings_get_bool('mh_sbqueryinfo_detail_iline'))
+						if ($queries->{$servertag}->{$nickname}->{'whowas_realname'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_ident_whowas', ident_prefix_str($queries->{$servertag}->{$nickname}->{'whowas_userhost'}));
+							if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_realname'))
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname_whowas', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'whowas_realname'}));
+
+							} else
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_realname_whowas', $queries->{$servertag}->{$nickname}->{'whowas_realname'});
+							}
 						}
 
-						if ($queries->{$servertag}->{$nickname}->{'servername'} eq '')
+						if ($queries->{$servertag}->{$nickname}->{'whowas_userhost'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'});
+							if (Irssi::settings_get_bool('mh_sbqueryinfo_detail_iline'))
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_ident_whowas', ident_prefix_str($queries->{$servertag}->{$nickname}->{'whowas_userhost'}));
+							}
+						}
 
-						} else
+						if ($queries->{$servertag}->{$nickname}->{'whowas_server'} ne '')
 						{
-							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server2_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'}, $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+							if ($queries->{$servertag}->{$nickname}->{'servername'} eq '')
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'});
+
+							} else
+							{
+								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_server2_whowas', $queries->{$servertag}->{$nickname}->{'whowas_server'}, $queries->{$servertag}->{$nickname}->{'servername'}, $queries->{$servertag}->{$nickname}->{'serverdesc'});
+							}
 						}
 
 						if ($queries->{$servertag}->{$nickname}->{'signon'})
@@ -1869,7 +1913,10 @@ sub command_whoq
 							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signon_whowas', '' . localtime($queries->{$servertag}->{$nickname}->{'signon'}));
 						}
 
-						$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signoff_whowas', $queries->{$servertag}->{$nickname}->{'whowas_signoff'});
+						if ($queries->{$servertag}->{$nickname}->{'whowas_signoff'})
+						{
+							$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_signoff_whowas', $queries->{$servertag}->{$nickname}->{'whowas_signoff'});
+						}
 
 						if ($queries->{$servertag}->{$nickname}->{'oper'})
 						{
@@ -1915,6 +1962,7 @@ sub command_whoq
 							if (Irssi::settings_get_bool('mh_sbqueryinfo_strip_quit_reason'))
 							{
 								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_quit_whowas', Irssi::strip_codes($queries->{$servertag}->{$nickname}->{'quit_reason'}));
+
 							} else
 							{
 								$windowitem->printformat(Irssi::MSGLEVEL_CRAP, 'mh_sbqueryinfo_whoq_quit_whowas', $queries->{$servertag}->{$nickname}->{'quit_reason'});
