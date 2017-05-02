@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_iline.pl v0.07 (20170501)
+# mh_iline.pl v0.08 (20170502)
 #
 # Copyright (c) 2017  Michael Hansen
 #
@@ -20,7 +20,7 @@
 #
 ##############################################################################
 #
-# IRC frontend to the https://i-line.space/ IRCnet I-line lookup service by pbl
+# IRC frontend to the IRCnet I-line lookup service by pbl (https://i-line.space/)
 #
 # *** updating from pre-v0.07 versions: *******************************
 # ***                                                               ***
@@ -49,7 +49,7 @@
 #	!iline <nickname> | lookup I-lines for any user on irc
 #	!version          | show version
 #	!help             | show help
-#	!about            | show version, description and help
+#	!about            | show description/url and optionally version and help
 #
 # webchat (mibbit only) users will have their real ip looked up if
 # mh_iline_command_iline_test_webchat setting is enabled
@@ -133,6 +133,9 @@
 #	mh_iline_command_about (string, default: 'About'):
 #		About command name /set -clear to disable
 #
+#	mh_iline_command_about_short (boolean, default: 0):
+#		dont show version and help in output
+#
 #	mh_iline_command_help (string, default: 'Help'):
 #		Help command name /set -clear to disable
 #
@@ -146,7 +149,15 @@
 #	mh_iline_flood_timeout (integer, default 60)
 #		allow max mh_iline_flood_count commands in this many seconds
 #
+#	mh_iline_flood_send_delay (integer, default 1750)
+#		msec between sending messages to channel, 1000 = 1 sec.
+#		0 to disable.
+#
 # history:
+#
+#	v0.08 (20170502)
+#		now rate-limits output (delay configurable with _flood_send_delay)
+#		added _command_about_short and supporting code
 #
 #	v0.07 (20170501)
 #		rewrite, older versions are just summarised below
@@ -176,16 +187,16 @@ use Irssi 20100403;
 
 { package Irssi::Nick }
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our %IRSSI   =
 (
 	'name'        => 'mh_iline',
-	'description' => 'IRC frontend to the https://i-line.space/ IRCnet I-line lookup service by pbl',
+	'description' => 'IRC frontend to the IRCnet I-line lookup service by pbl (https://i-line.space/)',
 	'license'     => 'BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'url'         => 'https://github.com/mh-source/irssi-scripts',
-	'changed'     => 'Mon May  1 11:22:53 CEST 2017',
+	'changed'     => 'Tue May  2 19:40:39 CEST 2017',
 );
 
 ##############################################################################
@@ -226,6 +237,8 @@ use constant
 };
 
 our $flood_count = 0;
+
+our @send_lines;
 
 ##############################################################################
 #
@@ -281,14 +294,15 @@ sub busy
 
 	if (not $busyvalue) # busy(0)
 	{
-		$busy->{'busy'}      = 0;  # are we busy?
-		$busy->{'cmd'}       = ''; # command currently active
-		$busy->{'servertag'} = ''; # servertag of active command
-		$busy->{'source'}    = ''; # source of command (channel or nickname)
-		$busy->{'nickname'}  = ''; # nickname of requester
-		$busy->{'address'}   = ''; # address to look up
-		$busy->{'data'}      = ''; # command data to look up
-		$busy->{'target'}    = ''; # target ofr reply (channel or nickname) only when different from source/nickname
+		$busy->{'busy'}        = 0;  # are we busy?
+		$busy->{'cmd'}         = ''; # command currently active
+		$busy->{'servertag'}   = ''; # servertag of active command
+		$busy->{'source'}      = ''; # source of command (channel or nickname)
+		$busy->{'nickname'}    = ''; # nickname of requester
+		$busy->{'address'}     = ''; # address to look up
+		$busy->{'data'}        = ''; # command data to look up
+		$busy->{'target'}      = ''; # target of reply (channel or nickname) only when different from source/nickname
+		$busy->{'sendtimeout'} = 0;  # irssi timeout for send flood control
 
 		return($busy->{'busy'});
 	}
@@ -333,7 +347,6 @@ sub busy
     }
 
     return($busy->{'busy'});
-
 }
 
 sub lag
@@ -395,6 +408,8 @@ sub floodcountup
 	}
 
 	$flood_count++;
+
+	return(1);
 }
 
 sub hex_to_ip
@@ -657,7 +672,9 @@ sub iline_pipe_read
 	}
 
 	send_line(iline_prefix($prefix) . $reply);
-	busy(0);
+	send_line('');
+
+	return(1);
 }
 
 sub iline_get
@@ -681,14 +698,14 @@ sub iline_get
 		}
 
 		send_line(iline_prefix(ILINE_PREFIX_REPLY + ILINE_PREFIX_ERROR) . 'Broken url?' . $extended);
-		busy(0);
+		send_line('');
 		return(0);
 	}
 
 	if (not pipe($readh, $writeh))
 	{
 		send_line(iline_prefix(ILINE_PREFIX_REPLY + ILINE_PREFIX_ERROR) . 'Failed to create pipe');
-		busy(0);
+		send_line('');
 		return(0);
 	}
 
@@ -974,23 +991,29 @@ sub cmd_iline
 	}
 
 	send_line(iline_prefix($prefixbits) . 'IP(4/6) or nickname not found');
-	busy(0);
+	send_line('');
 	return(0);
 }
 
 sub cmd_about
 {
-	cmd_version();
-	send_line('IRC frontend to the https://i-line.space/ IRCnet I-line lookup service by pbl');
+	if (not Irssi::settings_get_bool('mh_iline_command_about_short'))
+	{
+		cmd_version();
+	}
+	send_line('IRC frontend to the IRCnet I-line lookup service by pbl (https://i-line.space/)');
 	send_line('Download for Irssi at https://github.com/mh-source/irssi-scripts');
-	cmd_help();
+	if (not Irssi::settings_get_bool('mh_iline_command_about_short'))
+	{
+		cmd_help();
+	}
 
 	return(1);
 }
 
 sub cmd_version
 {
-	send_line('mh_iline.pl v0.07 Copyright (c) 2017  Michael Hansen');
+	send_line('mh_iline.pl v0.08 Copyright (c) 2017  Michael Hansen');
 
 	return(1);
 }
@@ -1085,7 +1108,7 @@ sub cmd
 		floodcountup();
 		busy(1, $command_word, $server->{'tag'}, $source, $nickname);
 		cmd_version();
-		busy(0);
+		send_line('');
 		return(1);
 	}
 
@@ -1096,7 +1119,7 @@ sub cmd
 		floodcountup();
 		busy(1, $command_word, $server->{'tag'}, $source, $nickname);
 		cmd_about();
-		busy(0);
+		send_line('');
 		return(1);
 	}
 
@@ -1107,7 +1130,7 @@ sub cmd
 		floodcountup();
 		busy(1, $command_word, $server->{'tag'}, $source, $nickname);
 		cmd_help();
-		busy(0);
+		send_line('');
 		return(1);
 	}
 
@@ -1132,45 +1155,55 @@ sub send_line
 		return(0);
 	}
 
-	my $line = 'MSG ';
-
-	if (Irssi::settings_get_bool('mh_iline_reply_notice'))
+	if ($data ne '')
 	{
-		$line = 'NOTICE ';
-	}
+		my $line = 'MSG ';
 
-	my $target = $busy->{'target'};
-
-	if ($target eq '')
-	{
-		if (Irssi::settings_get_bool('mh_iline_reply_private'))
+		if (Irssi::settings_get_bool('mh_iline_reply_notice'))
 		{
-			$target = $busy->{'nickname'};
-
-		} else {
-
-			$target = $busy->{'source'};
+			$line = 'NOTICE ';
 		}
+
+		my $target = $busy->{'target'};
+
+		if ($target eq '')
+		{
+			if (Irssi::settings_get_bool('mh_iline_reply_private'))
+			{
+				$target = $busy->{'nickname'};
+
+			} else {
+
+				$target = $busy->{'source'};
+			}
+		}
+
+		if ($target eq '')
+		{
+			return(0);
+		}
+
+		$line .= $target . ' ';
+
+		if ($server->ischannel($target) and Irssi::settings_get_bool('mh_iline_reply_prefix_nick'))
+		{
+			$line .= $busy->{'nickname'} . ': ';
+		}
+
+		if (Irssi::settings_get_bool('mh_iline_reply_prefix_command'))
+		{
+			$line .= '[' . $busy->{'cmd'} . '] ';
+		}
+
+		$data = $line . trim_space($data);
 	}
 
-	if ($target eq '')
+	push(@send_lines, $data);
+
+	if (not $busy->{'sendtimeout'})
 	{
-		return(0);
+		timeout_send_line();
 	}
-
-	$line .= $target . ' ';
-
-	if ($server->ischannel($target) and Irssi::settings_get_bool('mh_iline_reply_prefix_nick'))
-	{
-		$line .= $busy->{'nickname'} . ': ';
-	}
-
-	if (Irssi::settings_get_bool('mh_iline_reply_prefix_command'))
-	{
-		$line .= '[' . $busy->{'cmd'} . '] ';
-	}
-
-	$server->command($line . trim_space($data));
 
 	return(1);
 }
@@ -1184,6 +1217,48 @@ sub send_line
 sub timeout_flood_reset
 {
 	$flood_count = 0;
+
+	return(0);
+}
+
+sub timeout_send_line
+{
+	my $server = Irssi::server_find_tag($busy->{'servertag'});
+
+	if ($server)
+	{
+		my $line = shift(@send_lines);
+
+		if (not defined($line))
+		{
+			$busy->{'sendtimeout'} = 0;
+			return(1);
+		}
+
+		if ($line eq '')
+		{
+			busy(0);
+			return(1);
+		}
+
+		$server->command($line);
+	}
+
+	my $delay = int(Irssi::settings_get_int('mh_iline_flood_send_delay'));
+
+	if ($delay < 100) # 0 is disabled, minimum timout in irssi is 100 ms
+	{
+		if ($delay == 0)
+		{
+			return(timeout_send_line()); # shouldnt end up with more than 10 or so recursive calls (*fingers crossed*)
+		}
+
+		$delay = 100;
+	}
+
+	$busy->{'sendtimeout'} = Irssi::timeout_add_once($delay, 'timeout_send_line', undef); # secs...
+
+	return(1);
 }
 
 ##############################################################################
@@ -1214,7 +1289,7 @@ sub signal_redir_iline_event_211
 		}
 
 		send_line(iline_prefix(ILINE_PREFIX_STATSL + ILINE_PREFIX_ERROR) . 'No IP(4/6) found' . $extended);
-		busy(0);
+		send_line('');
 		return(0);
 	}
 
@@ -1272,7 +1347,7 @@ sub signal_redir_iline_event_401
 	}
 
 	send_line(iline_prefix(ILINE_PREFIX_NICK + ILINE_PREFIX_ERROR) . 'Nickname not found' . $extended);
-	busy(0);
+	send_line('');
 	return(1);
 }
 
@@ -1285,7 +1360,7 @@ sub signal_redir_iline_event_481
 		return(0);
 	}
 
-	busy(0);
+	send_line('');
 	return(1);
 }
 
@@ -1353,7 +1428,7 @@ sub signal_message_public_priority_low
 sub signal_message_own_public_priority_low
 {
 	my ($server, $data, $target) = @_;
-	signal_message_public_priority_low($server, $data, $server->{'nick'}, $server->{'userhost'}, $target);
+	return(signal_message_public_priority_low($server, $data, $server->{'nick'}, $server->{'userhost'}, $target));
 }
 
 ##############################################################################
@@ -1381,10 +1456,12 @@ Irssi::settings_add_bool('mh_iline', 'mh_iline_command_iline_hide_prefix',      
 Irssi::settings_add_bool('mh_iline', 'mh_iline_command_iline_prefix_long',       1);
 Irssi::settings_add_bool('mh_iline', 'mh_iline_command_iline_test_webchat',      1);
 Irssi::settings_add_str('mh_iline',  'mh_iline_command_about',                   'About');
+Irssi::settings_add_bool('mh_iline', 'mh_iline_command_about_short',             0);
 Irssi::settings_add_str('mh_iline',  'mh_iline_command_help',                    'Help');
 Irssi::settings_add_str('mh_iline',  'mh_iline_command_version',                 'Version');
 Irssi::settings_add_int('mh_iline',  'mh_iline_flood_count',                     5);
 Irssi::settings_add_int('mh_iline',  'mh_iline_flood_timeout',                   60);
+Irssi::settings_add_int('mh_iline',  'mh_iline_flood_send_delay',                1750);
 
 Irssi::Irc::Server::redirect_register('mh_iline iline stats L',
 	1, # remote
