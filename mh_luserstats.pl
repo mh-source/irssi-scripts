@@ -1,8 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl
-#
-# Copyright (c) 2018  Michael Hansen
+# mh_luserstats.pl v0.03 (201804240200) Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -24,15 +22,12 @@
 #
 # 	pre-alpha quality, beware!
 #
-# 	very verbose debug info is being printed by default, it can be disabled
-# 	and enabled in Irssi with (respectively):
-# 		/SCRIPT EXEC $Irssi::Script::mh_luserstats::debug = 0;
-# 		/SCRIPT EXEC $Irssi::Script::mh_luserstats::debug = 1;
-#
 # 	probably very IRCnet specific
 #
 # 	make sure you set mh_luserstats_servertag in Irssi or the script will
 # 	collect no data
+# 	You can enable and disable debug output with the mh_luserstats_debug
+# 	setting, OFF by default
 #
 # 	theres currently a hardcoded 1 minute delay between requests
 #
@@ -41,7 +36,6 @@
 #
 # 	the printed data format is:
 # 	"luserstats: <servertag> <servername> <unixtime> <local>(<max>) <global>(<max>) <channels> <operators> <servers> <services>"
-#                                                    |local->       |global->
 #
 # settings:
 #
@@ -50,7 +44,17 @@
 # 		calls the connection you want monitor or the script will not work.
 # 		f.ex.: /SET mh_luserstats_servertag IRCnet
 #
+# 	mh_luserstats_debug (boolean, default: OFF)
+# 		disable/enable debug output
+#
 # history:
+#
+# 	v0.03 (201804240200) --mh
+# 		- internal code cleanup, _shouldnt_ make functional difference
+# 		- for ease of use, debug is now an Irssi setting _debug
+# 		- cosmetic changes to some debug output
+# 		- added a welcome banner of sorts, printed regardles of debug on/off
+# 		- debug availability moved inside ifdefs for easy removal later
 #
 # 	v0.02 (201804212245) --mh
 # 		- minor comment, code and header typo corrections/updates
@@ -76,12 +80,12 @@ use warnings;
 
 use Irssi;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collects server lusers stats',
-	'changed'     => '201804212245',
+	'changed'     => '201804240200',
 	'license'     => 'MIT',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -94,14 +98,13 @@ our %IRSSI   =
 #
 ##############################################################################
 
-our $debug        = 1; # set to 0 to disable
 our $debug_indent = 0; # internal use for indenting debug output
 
 our $state = {}; # we need to store data globally inbetween signals
 
 ##############################################################################
 #
-# script functions
+# script debug functions
 #
 ##############################################################################
 
@@ -109,13 +112,19 @@ sub print_dbg
 {
 	my ($data) = @_;
 
-	if ($debug)
+	if (Irssi::settings_get_bool($IRSSI{'name'} . '_debug'))
 	{
-		print('luserstats: dbg:' . (' ' x $debug_indent) . $data);
+		Irssi::print('dbg' . (' ' x $debug_indent) . $data,  Irssi::MSGLEVEL_CLIENTCRAP | Irssi::MSGLEVEL_NO_ACT | Irssi::MSGLEVEL_NOHILIGHT);
 	}
 
 	return(1);
 }
+
+##############################################################################
+#
+# script general functions
+#
+##############################################################################
 
 sub sec2msec
 {
@@ -129,30 +138,107 @@ sub secs_till_0
 	return(60 - $secs);
 }
 
+##############################################################################
+#
+# script functions
+#
+##############################################################################
+
+sub state_clr
+{
+	$state = {};
+	return(1);
+}
+
+sub state_new
+{
+	state_clr();
+	$state->{'time'}                           = time();
+	$state->{'servername'}                     = undef;
+	$state->{'channels'}                       = -1;
+    $state->{'operators'}                      = -1;
+    $state->{'services'}                       = -1;
+	$state->{'servers'}                        = -1;
+	$state->{'users'}->{'global'}->{'current'} = -1;
+	$state->{'users'}->{'global'}->{'max'}     = -1;
+	$state->{'users'}->{'local'}->{'current'}  = -1;
+	$state->{'users'}->{'local'}->{'max'}      = -1;
+	return(1);
+}
+
 sub luserstats
 {
+	$debug_indent++; print_dbg('luserstats() called');
+
 	#
 	# this is called everytime we have a new set of data in $state
 	#
-	$debug_indent++; print_dbg('luserstats() called');
 
 	# print the data for debugging (and reference)
-	print('luserstats: '
+	irssi_print('luserstats: '
 		. $state->{'servertag'}  . ' ' # servertag as set in mh_luserstats_servertag
 		. $state->{'servername'} . ' ' # servername as returned by the server
 		. $state->{'time'}       . ' ' # unix timestamp of current data
-		. $state->{'local'}->{'current'}  . '(' . $state->{'local'}->{'max'}  . ') ' # local usercounts as returned by server
-		. $state->{'global'}->{'current'} . '(' . $state->{'global'}->{'max'} . ') ' # global usercounts as returned by server
-		. $state->{'channels'}        . ' ' # channels formed as returned by server
-		. $state->{'operators'}       . ' ' # operators online as returned by server
-		. $state->{'global_servers'}  . ' ' # servers online as returned by server
-		. $state->{'global_services'} . ' ' # services online as returned by server
+		. $state->{'users'}->{'local'}->{'current'}  . '(' . $state->{'users'}->{'local'}->{'max'}  . ') ' # local usercounts as returned by server
+		. $state->{'users'}->{'global'}->{'current'} . '(' . $state->{'users'}->{'global'}->{'max'} . ') ' # global usercounts as returned by server
+		. $state->{'channels'}   . ' ' # channels formed as returned by server
+		. $state->{'operators'}  . ' ' # operators online as returned by server
+		. $state->{'servers'}    . ' ' # servers online as returned by server
+		. $state->{'services'}   . ' ' # services online as returned by server
 	);
 
-	#TODO: do something with the data...
-
-	print_dbg('luserstats() call done'); $debug_indent--;
 	return(1);
+}
+
+sub luserstats_next_timeout
+{
+	$debug_indent++; print_dbg('luserstats_next_timeout() called');
+
+	my @now_struct = localtime(); # sec, min, hour, mday, mon, year, wday, yday, isdst
+	                              # 0    1    2     3     4    5     6     7     8
+	# next timeout at next whole minute
+	Irssi::timeout_add_once(sec2msec(secs_till_0($now_struct[0])), 'timeout_luserstats', undef);
+	print_dbg('luserstats_next_timeout() done [next timeout_luserstats() in ' . secs_till_0($now_struct[0]) . ' secs]'); $debug_indent--; 
+	return(1);
+}
+
+##############################################################################
+#
+# irssi general functions
+#
+##############################################################################
+
+sub irssi_print
+{
+	my ($data) = @_;
+	Irssi::print($data, Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NO_ACT | Irssi::MSGLEVEL_NOHILIGHT);
+	return(1);
+}
+
+sub irssi_current_numeric
+{
+	# this returns the current numeric being processed by irssi
+	return(Irssi::parse_special('$H'));
+}
+
+sub irssi_list_servertags
+{
+	my $string = '';
+
+	for my $serverrec (Irssi::servers())
+	{
+		if (ref($serverrec) eq 'Irssi::Irc::Server')
+		{
+			$string .= '"' . $serverrec->{'tag'} . '" ';
+		}
+	}
+
+	if ($string eq '')
+	{
+		$string = "<none>";
+	}
+
+	return($string);
 }
 
 ##############################################################################
@@ -163,42 +249,43 @@ sub luserstats
 
 sub timeout_luserstats
 {
-	 $debug_indent++; print_dbg('timeout_luserstats() called');
+	$debug_indent++; print_dbg('timeout_luserstats() called');
 
 	# clean state and start next timeout so we get that out of the way
-	$state = {};
-	$state->{'time'} = time();
-	timeout_luserstats_next();
+	state_new();
+	luserstats_next_timeout();
 
 	#
 	# find the right server and see if it is connected
 	#
 
-	$state->{'servertag'} = Irssi::settings_get_str('mh_luserstats_servertag');
+	$state->{'servertag'} = Irssi::settings_get_str($IRSSI{'name'} . '_servertag');
 
 	if ($state->{'servertag'} eq '')
 	{
 		# servertag not configured
-		$state = {};
-		print_dbg('timeout_luserstats() warning: servertag not configured. done'); $debug_indent--;
+		print_dbg('timeout_luserstats() done [warning: servertag not configured]');
+		print_dbg('timeout_luserstats()      [active servertags: ' . irssi_list_servertags() . ']'); $debug_indent--;
+		state_clr();
 		return(1);
 	}
 
-	print_dbg('timeout_luserstats() servertag is "' . $state->{'servertag'}  . '"');
-
 	my $serverrec = Irssi::server_find_tag($state->{'servertag'});
 
-	if (ref($serverrec) ne 'Irssi::Irc::Server')
+	if (ref($serverrec) ne 'Irssi::Irc::Server>')
 	{
 		# serverrec not found
-		print_dbg('timeout_luserstats() warning: serverrec not found for "' . $state->{'servertag'}  . '". done'); $debug_indent--;
+		print_dbg('timeout_luserstats() done [warning: serverrec "' . $state->{'servertag'}  . '" not found]');
+		print_dbg('timeout_luserstats()      [active servertags: ' . irssi_list_servertags() . ']'); $debug_indent--;
+		state_clr();
 		return(1);
 	}
 
 	if (not $serverrec->{'connected'})
 	{
 		# server not fully connected
-		print_dbg('timeout_luserstats() warning: server "' . $state->{'servertag'}  . '" not fully connected. done'); $debug_indent--;
+		print_dbg('timeout_luserstats() done [warning: server "' . $state->{'servertag'}  . '" not fully connected]'); $debug_indent--;
+		state_clr();
 		return(1);
 	}
 
@@ -206,40 +293,24 @@ sub timeout_luserstats
 	# request luserstats
 	#
 
-	print_dbg('timeout_luserstats() sending request...');
-
 	$serverrec->redirect_event('mh_luserstats lusers',
 		1,  # stop events count
 		'', # comparison argument
 		-1, # remote (-1: use default)
 		'', # failure signal
 		{   # signals
-			'event 251' => 'redir mh_luserstats event numeric', # RPL_LUSERCLIENT
-			'event 252' => 'redir mh_luserstats event numeric', # RPL_LUSEROP
-			'event 254' => 'redir mh_luserstats event numeric', # RPL_LUSERCHANNELS
-			'event 265' => 'redir mh_luserstats event numeric', # RPL_LOCALUSERS
-			'event 266' => 'redir mh_luserstats event numeric', # RPL_GLOBALUSERS
-			''          => 'event empty',                       # ignore everything else
+			'event 251' => 'redir ' . $IRSSI{'name'} . ' event numeric', # RPL_LUSERCLIENT
+			'event 252' => 'redir ' . $IRSSI{'name'} . ' event numeric', # RPL_LUSEROP
+			'event 254' => 'redir ' . $IRSSI{'name'} . ' event numeric', # RPL_LUSERCHANNELS
+			'event 265' => 'redir ' . $IRSSI{'name'} . ' event numeric', # RPL_LOCALUSERS
+			'event 266' => 'redir ' . $IRSSI{'name'} . ' event numeric', # RPL_GLOBALUSERS
+			''          => 'event empty',                                # ignore everything else
 		}
 	);
 
 	$serverrec->send_raw_now('LUSERS');
 
-	print_dbg('timeout_luserstats() call done'); $debug_indent--;
-	return(1);
-}
-
-sub timeout_luserstats_next
-{
-	$debug_indent++; print_dbg('timeout_luserstats_next() called');
-
-	my @now_struct = localtime(); # sec, min, hour, mday, mon, year, wday, yday, isdst
-	                              # 0    1    2     3     4    5     6     7     8
-
-	# next timeout at next whole minute
-	Irssi::timeout_add_once(sec2msec(secs_till_0($now_struct[0])), 'timeout_luserstats', undef);
-
-	print_dbg('timeout_luserstats_next() call done [next timeout_luserstats() in ' . secs_till_0($now_struct[0]) . ' secs]'); $debug_indent--; 
+	print_dbg('timeout_luserstats() done [request sent]'); $debug_indent--;
 	return(1);
 }
 
@@ -253,7 +324,7 @@ sub signal_redir_event_numeric
 {
 	my ($serverrec, $data, $nickname, $userhost) = @_;
 
-	my $numeric = Irssi::parse_special('$H');
+	my $numeric = irssi_current_numeric();
 
 	$debug_indent++; print_dbg('signal_redir_event_numeric() called [numeric: ' . $numeric . ']');
 
@@ -263,11 +334,11 @@ sub signal_redir_event_numeric
 
 	if (not defined($nickname))
 	{
+		# nickname not defined
 		# should never happen, but lets play it safe
 		$nickname = '<unknown>';
+		print_dbg('signal_redir_event_numeric() warning: nickname not defined');
 	}
-
-	print_dbg('signal_redir_event_numeric() nickname/servername is "' . $nickname . '"');
 
 	#
 	# set the servername or make sure it is the same if already set
@@ -277,20 +348,15 @@ sub signal_redir_event_numeric
 	{
 		if ($state->{'servername'} ne $nickname)
 		{
+			# nickname not same as servername
 			# this should never happen, but would mess stats badly
-			print_dbg('signal_redir_event_numeric() warning: nickname "' . $nickname  . '" not same as servername "' . $state->{'servername'}  . '". done'); $debug_indent--;
+			print_dbg('signal_redir_event_numeric() done [warning: nickname "' . $nickname  . '" not same as servername "' . $state->{'servername'}  . '"]'); $debug_indent--;
 			return(1);
 		}
 	}
 	else
 	{
 		$state->{'servername'} = $nickname;
-
-		# in case we do not get any 25# replies
-		$state->{'channels'}        = -1;
-		$state->{'operators'}       = -1;
-		$state->{'global_services'} = -1;
-		$state->{'global_servers'}  = -1;
 	}
 
 	#
@@ -313,14 +379,13 @@ sub signal_redir_event_numeric
 		{
 			# we also got a global user count, but it is (or should be) the same as in 266
 			# so ignore it for now (but it is in $1 if needed)
-			$state->{'global_services'} = int($2);
-			$state->{'global_servers'}  = int($3);
-
-			print_dbg('signal_redir_event_numeric() matched event 251/servs');
+			$state->{'services'} = int($2);
+			$state->{'servers'}  = int($3);
+			print_dbg('signal_redir_event_numeric() matched event 251');
 		}
 		else
 		{
-			print_dbg('signal_redir_event_numeric() warning: matched event 251 but not data');
+			print_dbg('signal_redir_event_numeric() warning: matched event 251 but not data "' . $data .'"');
 		}
 	}
 	elsif ($numeric == 252)
@@ -328,12 +393,11 @@ sub signal_redir_event_numeric
 		if ($data =~ m/^\S+\s+(\d+)\s+:operators online/)
 		{
 			$state->{'operators'} = int($1);
-
-			print_dbg('signal_redir_event_numeric() matched event 252/operators');
+			print_dbg('signal_redir_event_numeric() matched event 252');
 		}
 		else
 		{
-			print_dbg('signal_redir_event_numeric() warning: matched event 252 but not data');
+			print_dbg('signal_redir_event_numeric() warning: matched event 252 but not data "' . $data .'"');
 		}
 	}
 	elsif ($numeric == 254)
@@ -341,37 +405,34 @@ sub signal_redir_event_numeric
 		if ($data =~ m/^\S+\s+(\d+)\s+:channels formed/)
 		{
 			$state->{'channels'} = int($1);
-
-			print_dbg('signal_redir_event_numeric() matched event 254/channels');
+			print_dbg('signal_redir_event_numeric() matched event 254');
 		}
 		else
 		{
-			print_dbg('signal_redir_event_numeric() warning: matched event 254 but not data');
+			print_dbg('signal_redir_event_numeric() warning: matched event 254 but not data "' . $data .'"');
 		}
 	}
 	elsif (($numeric == 265) or ($numeric == 266))
 	{
 		if ($data =~ m/^\S+\s+(\d+)\s+(\d+)\s+:Current (local|global)/)
 		{
-			$state->{$3}->{'current'} = int($1);
-			$state->{$3}->{'max'}     = int($2);
+			$state->{'users'}->{$3}->{'current'} = int($1);
+			$state->{'users'}->{$3}->{'max'}     = int($2);
+			print_dbg('signal_redir_event_numeric() matched event 265/6 "' . $3 . '"');
 
-			print_dbg('signal_redir_event_numeric() matched event "' . $3 . '"');
-
-			# 266 is our last event so this is where it ends
-			if ($numeric == 266)
+			if ($numeric == 266) # 266 is our last event so this is where it ends
 			{
-				luserstats(); # this is where we process the global $state data
-				$state = {};
+				luserstats(); # process the global $state data
+				state_clr();
 			}
 		}
 		else
 		{
-			print_dbg('signal_redir_event_numeric() warning: matched event 265/6 but not data');
+			print_dbg('signal_redir_event_numeric() warning: matched event 265/6 but not data "' . $data .'"');
 		}
 	}
 
-	print_dbg('signal_redir_event_numeric() call done'); $debug_indent--;
+	print_dbg('signal_redir_event_numeric() done'); $debug_indent--;
 	return(1);
 }
 
@@ -381,9 +442,22 @@ sub signal_redir_event_numeric
 #
 ##############################################################################
 
-Irssi::settings_add_str('mh_luserstats', 'mh_luserstats_servertag', ''); # server tag of server we monitor
+# welcome banner
+irssi_print('mh_luserstats.pl v' . $VERSION . ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen');
 
-Irssi::Irc::Server::redirect_register('mh_luserstats lusers',
+# irssi settings
+Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_servertag', ''); # server tag of server we monitor
+Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_debug',     0);  # debug disabled/enabled
+
+# print irssi settings
+irssi_print($IRSSI{'name'} . '_servertag = "' . Irssi::settings_get_str( $IRSSI{'name'} . '_servertag') . '"');
+irssi_print($IRSSI{'name'} . '_debug     = '  . Irssi::settings_get_bool($IRSSI{'name'} . '_debug'));
+
+# irssi signals
+Irssi::signal_add('redir ' . $IRSSI{'name'} . ' event numeric', 'signal_redir_event_numeric');
+
+# irssi command redirection for 'LUSERS'
+Irssi::Irc::Server::redirect_register($IRSSI{'name'} . ' lusers',
 	0, # remote
 	0, # remote timeout
 	{  # start events
@@ -401,12 +475,10 @@ Irssi::Irc::Server::redirect_register('mh_luserstats lusers',
 	}
 );
 
-Irssi::signal_add('redir mh_luserstats event numeric', 'signal_redir_event_numeric');
+irssi_print('active servertags       : ' . irssi_list_servertags());
 
-Irssi::timeout_add_once(100, 'timeout_luserstats_next', undef);
-
-print_dbg(' mh_luserstats.pl loaded');
-
+# start initial timeout
+Irssi::timeout_add_once(100, 'luserstats_next_timeout', undef);
 1;
 
 ##############################################################################
