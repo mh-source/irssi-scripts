@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.03 (201804240200) Copyright (c) 2018  Michael Hansen
+# mh_luserstats.pl v0.04 (201804240215) Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -49,6 +49,10 @@
 #
 # history:
 #
+#
+# 	v0.04 (201804240215) --mh
+# 		- oops, missed a debug print line, messed up debug output
+#
 # 	v0.03 (201804240200) --mh
 # 		- internal code cleanup, _shouldnt_ make functional difference
 # 		- for ease of use, debug is now an Irssi setting _debug
@@ -80,12 +84,12 @@ use warnings;
 
 use Irssi;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collects server lusers stats',
-	'changed'     => '201804240200',
+	'changed'     => '201804240215',
 	'license'     => 'MIT',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -187,6 +191,7 @@ sub luserstats
 		. $state->{'services'}   . ' ' # services online as returned by server
 	);
 
+	print_dbg('luserstats() done'); $debug_indent--;
 	return(1);
 }
 
