@@ -1,6 +1,8 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.05 (201804240615) Copyright (c) 2018  Michael Hansen
+# mh_luserstats.pl v0.06 (201804251140)
+#
+# Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -20,23 +22,27 @@
 #
 # about:
 #
-# 	pre-alpha quality, beware!
+# 	almost-alpha quality, beware!
 #
 # 	probably very IRCnet specific
 #
 # 	make sure you set mh_luserstats_servertag in Irssi or the script will
 # 	collect no data
 #
-# 	You can enable and disable debug output with the mh_luserstats_debug
-# 	setting, OFF by default
+# 	data is stored under the directory set in mh_luserstats_datadir
+# 	currently as data/<servertag>/<servername>/<YYYY>/<M>/<D>.csv
+#
+# 	the CSV file format is (besides subject to change):
+#
+# 	<timestamp>,<users(l)>,<usersmax(l)>,<users(g)>,<usersmax(g)>,<channels(g)>,<operators(g)>,<servers(g)>,<services(g)>
+#
+# 	where (l) is local and (g) is global. value is -1 if it was not collected
+# 	for some reason (unlikely on IRCnet 0PN*)
 #
 # 	theres currently a hardcoded 1 minute delay between requests
 #
-# 	and it simply prints the data in Irssi, so it doenst even really collect
-# 	data... yet
-#
-# 	the printed data format is:
-# 	"luserstats: <servertag> <servername> <unixtime> <local>(<max>) <global>(<max>) <channels> <operators> <servers> <services>"
+# 	You can enable and disable debug output with the mh_luserstats_debug
+# 	setting, OFF by default.
 #
 # settings:
 #
@@ -45,10 +51,21 @@
 # 		calls the connection you want monitor or the script will not work.
 # 		f.ex.: /SET mh_luserstats_servertag IRCnet
 #
+# 	mh_luserstats_pingpong (boolean, default: ON)
+# 		disable/enable ping/pong message on each succesfull logline
+#
+# 	mh_luserstats_datadir (string, default: $IRSSI_DIR'/mh_luserstats')
+# 		directory under which we store data files
+#
 # 	mh_luserstats_debug (boolean, default: OFF)
 # 		enable/disable debug output
 #
 # history:
+#
+# 	v0.06 (201804251140) --mh
+# 		- we now store data to files, with some new settings and changes to support that
+# 		- ping/pong message with setting _pingpong since we are otherwise silent
+# 		  when debug is off. no longer prints data in irssi, but to csv file
 #
 # 	v0.05 (201804240615) --mh
 # 		- fixed showstopper bug in v0.04 (never finding a valid servertag)
@@ -82,6 +99,9 @@
 use strict;
 use warnings;
 
+use File::Path; # make_path()
+use IO::Handle; # ->autoflush()
+
 ##############################################################################
 #
 # irssi header
@@ -90,12 +110,12 @@ use warnings;
 
 use Irssi;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collects server lusers stats',
-	'changed'     => '201804240615',
+	'changed'     => '201804251140',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -111,6 +131,11 @@ our %IRSSI   =
 our $debug_indent = 0; # internal use for indenting debug output
 
 our $state = {}; # we need to store data globally inbetween signals
+our $log   =     # log and logging information
+{
+	'mday'        => -1,    # current day-of-month for logfile
+	'file_handle' => undef, # current file handle for logfile
+};
 
 ##############################################################################
 #
@@ -185,22 +210,81 @@ sub luserstats
 	# this is called everytime we have a new set of data in $state
 	#
 
-	# print the data for debugging (and reference)
-	irssi_print('luserstats: '
-		. $state->{'servertag'}  . ' '
-		. $state->{'servername'} . ' '
-		. $state->{'time'}       . ' '
-		. $state->{'users'}->{'local'}->{'current'}  . '('
-		. $state->{'users'}->{'local'}->{'max'}      . ') '
-		. $state->{'users'}->{'global'}->{'current'} . '('
-		. $state->{'users'}->{'global'}->{'max'}     . ') '
-		. $state->{'channels'}  . ' '
-		. $state->{'operators'} . ' '
-		. $state->{'servers'}   . ' '
-		. $state->{'services'}
-	);
+	my @time_struct = localtime($state->{'time'}); # sec, min, hour, mday, mon, year, wday, yday, isdst
+	                                               # 0    1    2     3     4    5     6     7     8
 
-	print_dbg('luserstats() done'); $debug_indent--;
+	#
+	# do we need to roll over to a new logfile (mday changed) or
+	# do we need to open the first one (log mday -1)?
+	#
+
+	if (($time_struct[3] != $log->{'mday'}) or (not defined($log->{'file_handle'})))
+	{
+		if (defined($log->{'file_handle'}))
+		{
+			print_dbg('luserstats() new mday ' . $time_struct[3] .  ' (was ' . $log->{'mday'} .  ')');
+		}
+		else
+		{
+			print_dbg('luserstats() log file handle is undefined');
+		}
+		$log->{'mday'} = $time_struct[3];
+
+		if (defined($log->{'file_handle'}))
+		{
+			# close old file handle, this can fail, but then its out of our hands anyways
+			if (not close($log->{'file_handle'}))
+			{
+				print_dbg('luserstats() warning: close failed for old logfile: ' . "$!");
+			}
+			$log->{'file_handle'} = undef;
+		}
+
+		my $filename = Irssi::settings_get_str($IRSSI{'name'} . '_datadir') . '/data'
+			. '/' . $state->{'servertag'} . '/' . $state->{'servername'}
+			. '/' . (1900+$time_struct[5]) . '/' . (1+$time_struct[4]);
+			#        year                           month
+
+		File::Path::make_path $filename;
+
+		$filename .= '/' . $log->{'mday'} . '.csv';
+
+		if (not open($log->{'file_handle'}, '>>:encoding(UTF-8)', $filename))
+		{
+			#TODO: deal with the error more nicely
+			print_dbg('luserstats() done [warning: open failed for new logfile: ' . "$!" . ']'); $debug_indent--;
+			$log->{'file_handle'} = undef;
+			return(1);
+		}
+		$log->{'file_handle'}->autoflush(1);
+	}
+
+	if (not print( { $log->{'file_handle'} } $state->{'time'}
+		. ',' . $state->{'users'}->{'local'}->{'current'}
+		. ',' . $state->{'users'}->{'local'}->{'max'}
+		. ',' . $state->{'users'}->{'global'}->{'current'}
+		. ',' . $state->{'users'}->{'global'}->{'max'}
+		. ',' . $state->{'channels'}
+		. ',' . $state->{'operators'}
+		. ',' . $state->{'servers'}
+		. ',' . $state->{'services'}
+		. "\n"))
+	{
+			#TODO: deal with the error more nicely
+			#      we could try a second run to reopen file and write the data
+			#      before giving up completely
+			print_dbg('luserstats() done [warning: print failed: ' . "$!" . ']'); $debug_indent--;
+			close($log->{'file_handle'});
+			$log->{'file_handle'} = undef;
+			return(1);
+	}
+
+	if (Irssi::settings_get_bool($IRSSI{'name'} . '_pingpong'))
+	{
+		irssi_print('mh_luserstats: ping/pong');
+	}
+
+	print_dbg('luserstats() done [log entry added]'); $debug_indent--;
 	return(1);
 }
 
@@ -451,11 +535,16 @@ sub signal_redir_event_numeric
 irssi_print('mh_luserstats.pl v' . $VERSION . ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen');
 
 # irssi settings
+Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_datadir',        # directory under which we store data files
+                                                                        Irssi::get_irssi_dir() . '/mh_luserstats');
 Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_servertag', ''); # server tag of server we monitor
+Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_pingpong',  1);  # show pingpong message on each logline
 Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_debug',     0);  # debug disabled/enabled
 
 # print irssi settings
+irssi_print($IRSSI{'name'} . '_datadir   = "' . Irssi::settings_get_str( $IRSSI{'name'} . '_datadir')   . '"');
 irssi_print($IRSSI{'name'} . '_servertag = "' . Irssi::settings_get_str( $IRSSI{'name'} . '_servertag') . '"');
+irssi_print($IRSSI{'name'} . '_pingpong  = '  . Irssi::settings_get_bool($IRSSI{'name'} . '_pingpong'));
 irssi_print($IRSSI{'name'} . '_debug     = '  . Irssi::settings_get_bool($IRSSI{'name'} . '_debug'));
 
 # irssi signals
