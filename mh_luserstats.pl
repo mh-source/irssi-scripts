@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.07 (201804281730)
+# mh_luserstats.pl v0.08 (201804292135)
 #
 # Copyright (c) 2018  Michael Hansen
 #
@@ -33,20 +33,24 @@
 # 	files stored under the directory set in mh_luserstats_datadir. the idea
 # 	being these files can be used to generate pretty graphs of usercounts on
 # 	a server and/or network over time. it is currently hardcoded to request
-# 	data once per minute.
+# 	data once per minute
 #
 # 	datadir layout: data/<network>/<server>/<year>/<month>/<dayofmonth>.csv
+#
+# 	<month> and <dayofmonth> are zeropadded numbers
 #
 # 	the collected data is local, and global usercounts and their max values
 # 	as returned by the server 'USERS' command. this will not work if the
 # 	server is in strict rfc1459 mode and it may not be portable across ircds
 #
-#   CSV file format: <timestamp>,<local>,<local max>,<global>,<global max>
+# 	CSV file format: <timestamp>,<local>,<local max>,<global>,<global max>
+#
+# 	<timestamp> is whatever the Irssi client host thinks is localtime
 #
 # 	should the script for some reason only collect some of the data and still
 # 	write it to file, the missing fields will have a value of -1
 #
-# 	comments, suggestions and bug-reports are welcome.
+# 	comments, suggestions and bug-reports are welcome
 #
 # 	-- Michael Hansen
 #
@@ -86,6 +90,7 @@
 #
 # 	some thoughts on possible future changes?
 #
+# 	- <timestamp> could adjustable to some other format and/or timezone
 # 	- the mh_luserstats_server setting could use a simple explanation - but i
 # 	  cant come up with one. i barely know how it works myself :/  but it is
 # 	  not very easy to get this setting right it seems
@@ -100,8 +105,8 @@
 # 	  am also not convinced we need this
 # 	- flushing to files on each write (->autoflush(1)) could be optional, as
 # 	  it is not needed unless we wanna check the CSV files 'live' (ex. for
-# 	  generating per-hour graphs) or possibly to avoid dataloss should
-# 	  the client crash. we could also flush at intervals
+# 	  generating per-hour graphs) or possibly to avoid dataloss should the
+# 	  client crash. we could also flush at intervals
 # 	- generating the graphs, i feel should be done externally via cron or
 # 	  Some other means. but i am not against having the script trigger it at
 # 	  intervals in some way
@@ -111,6 +116,10 @@
 # 	some reason, attempted to stay within 78 character columns
 #
 # history:
+#
+# 	v0.08 (201804292135) --mh
+# 		- hopefully fixed the <timestamp> to be localtime
+# 		- cosmetic changes to comments and code
 #
 # 	v0.07 (201804281730) --mh
 # 		- rewrite/cleanup. alpha release
@@ -128,8 +137,9 @@
 use strict;
 use warnings;
 
-use File::Path; # make_path()
-use IO::Handle; # ->autoflush()
+use File::Path;  # make_path()
+use IO::Handle;  # ->autoflush()
+use Time::Local; # timelocal_nocheck()
 
 ##############################################################################
 #
@@ -139,12 +149,12 @@ use IO::Handle; # ->autoflush()
 
 use Irssi;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collect server and network usercounts in CSV files',
-	'changed'     => '201804281730',
+	'changed'     => '201804292135',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -157,9 +167,9 @@ our %IRSSI   =
 #
 ##############################################################################
 
-our $state =                    # global state/data information and storage
+our $state = # global state/data information and storage
 {
-	'log'  =>                   # logfile state information
+	'log'  => # logfile state information
 	{
 		'networkname' => undef, # networkname of current filname
 		'servername'  => undef, # servername of current filname
@@ -167,7 +177,7 @@ our $state =                    # global state/data information and storage
 		'mday' => -1,           # day-of-month for filename and nightly
 		                        # filename rotation
 	},
-	'data' =>                   # most recently collected data
+	'data' => # most recently collected data
 	{
 	},
 };
@@ -238,10 +248,10 @@ sub irssi_servers_qstr
 		if (ref($serverrec) eq 'Irssi::Irc::Server') # only want irc servers
 		{
 			if (not $serverrec->{'connected'}) # only connected servers so we
-			                                   # can trust the 'real_address'
-			{
+			{                                  # can trust the 'real_address'
 				next;
 			}
+
 			if ($string ne '') # prefix a space unless first servertag
 			{
 				$string .= ' '
@@ -249,10 +259,10 @@ sub irssi_servers_qstr
 
 			my $chatnet = $serverrec->{'chatnet'};
 
-            if ($chatnet eq '') # if server has no network, use tag instead
-            {
-                $chatnet = $serverrec->{'tag'};
-            }
+			if ($chatnet eq '') # if server has no network, use tag instead
+			{
+				$chatnet = $serverrec->{'tag'};
+			}
 
 			$string .= '"' . $chatnet . '/'
 			               . $serverrec->{'real_address'} . '"';
@@ -289,8 +299,8 @@ sub luserstats
 	#
 
 	my @time_struct = localtime($data->{'time'});
-		# 0    1    2     3     4    5     6     7     8
-		# sec, min, hour, mday, mon, year, wday, yday, isdst
+	   # 0    1    2     3     4    5     6     7     8
+	   # sec, min, hour, mday, mon, year, wday, yday, isdst
 
 	if (defined($log->{'fh'}))
 	{
@@ -305,7 +315,8 @@ sub luserstats
 		elsif (($log->{'networkname'} ne $data->{'networkname'}) or
 		       ($log->{'servername'}  ne $data->{'servername'}))
 		{
-			debug_print('luserstats() network or server name changed. logfile re-open');
+			debug_print('luserstats() network or server name changed.'
+				. ' logfile re-open');
 			# the server we are logging changed name, close old file handle
 			close($log->{'fh'}); # this can fail, but out of our hands then
 			$log->{'fh'} = undef;
@@ -331,7 +342,7 @@ sub luserstats
 			. '/' . sprintf("%02d", (1+$time_struct[4])) # month (zeropadded)
 		;
 
-        File::Path::make_path $filename; # this can fail but we catch that at
+		File::Path::make_path $filename; # this can fail but we catch that at
 		                                 # open()-time
 
 		# add the filename part
@@ -339,10 +350,11 @@ sub luserstats
 
 		if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
 		{
-			debug_print('luserstats() error! open failed for "' . $filename . '": ' . "$!");
+			debug_print('luserstats() error! open failed for "' . $filename
+				. '": ' . "$!");
 			$log->{'fh'} = undef;
-            return(1);
-        }
+			return(1);
+		}
 
 		$log->{'fh'}->autoflush(1);
 	}
@@ -351,7 +363,8 @@ sub luserstats
 	# lets get our data stored on file
 	#
 
-	if (not print( { $log->{'fh'} } $data->{'time'}
+	if (not print( { $log->{'fh'} }
+		Time::Local::timelocal_nocheck(@time_struct)
 		. ',' . $data->{'users'}->{'local'}->{'current'}
 		. ',' . $data->{'users'}->{'local'}->{'max'}
 		. ',' . $data->{'users'}->{'global'}->{'current'}
@@ -365,7 +378,7 @@ sub luserstats
 		close($log->{'fh'}); # this will probably fail, but meh
 		$log->{'fh'} = undef;
 		return(1);
-    }
+	}
 
 	return(1);
 }
@@ -384,11 +397,11 @@ sub next_timeout_luserstats
 	   # sec, min, hour, mday, mon, year, wday, yday, isdst
 
 	# add timeout at next    whole minute       (in msecs)
-    Irssi::timeout_add_once((60 - $now_struct[0]) * 1000,
+	Irssi::timeout_add_once((60 - $now_struct[0]) * 1000,
 		'timeout_luserstats', undef
 	);
 
-    return(1);
+	return(1);
 }
 
 ##############################################################################
@@ -476,7 +489,7 @@ sub timeout_luserstats
 			. irssi_servers_qstr()
 		);
 		$state->{'data'} = {};
-	    next_timeout_luserstats();
+		next_timeout_luserstats();
 		return(1);
 	}
 
@@ -498,8 +511,9 @@ sub timeout_luserstats
 		}
 	);
 
-    $serverrec->send_raw_now('USERS');
-    next_timeout_luserstats();
+	$serverrec->send_raw_now('USERS');
+	next_timeout_luserstats();
+
 	return(1);
 }
 
@@ -524,7 +538,7 @@ sub signal_redir_event_numeric
 	#
 
 	if (not defined($nickname))
-    {
+	{
 		# should never happen. lets play it safe, we need it set to something
 		$nickname = '<unknown>';
 	}
@@ -556,12 +570,12 @@ sub signal_redir_event_numeric
 		if ($numeric_type eq 'global') # 'global' is our last expected event
 		{
 			# process collected data
-            luserstats();
-            $state->{'data'} = {};
-        }
-    }
+			luserstats();
+			$state->{'data'} = {};
+		}
+	}
 
-    return(1);
+	return(1);
 }
 
 ##############################################################################
@@ -586,7 +600,7 @@ Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_debug',
 	1
 );
 Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_datadir',
-    Irssi::get_irssi_dir() . '/' . $IRSSI{'name'}
+	Irssi::get_irssi_dir() . '/' . $IRSSI{'name'}
 );
 Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_server',
 	'<network>/<server>'
