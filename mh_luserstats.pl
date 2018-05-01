@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.08 (201804292135)
+# mh_luserstats.pl v0.09 (201805011800)
 #
 # Copyright (c) 2018  Michael Hansen
 #
@@ -24,6 +24,8 @@
 #
 # 	alpha quality. be carefull! please read documentation before loading
 #
+# 	*** <timestamp> format is uncertain and being tested, do not use ***
+#
 # 	note: both datadir layout and CSV file format have changed slightly since
 # 	v0.06 and are no longer compatible. the mh_luserstats_servertag setting
 # 	have gone and replaced by the slightly different mh_luserstats_server
@@ -45,10 +47,12 @@
 #
 # 	CSV file format: <timestamp>,<local>,<local max>,<global>,<global max>
 #
-# 	<timestamp> is whatever the Irssi client host thinks is localtime
-#
 # 	should the script for some reason only collect some of the data and still
 # 	write it to file, the missing fields will have a value of -1
+#
+# 	the command '/mh_luserstats' will show the script version, information
+# 	about available servers, lastlog of script events (hardcoded to 42), and
+# 	a few other details
 #
 # 	comments, suggestions and bug-reports are welcome
 #
@@ -78,15 +82,6 @@
 # 	  (this is the next 'big' item. now that we have - i think - settled on
 # 	  format for the data, introducing this extra file should be seamless
 # 	* _debug should be for debugging only (and eliminated from the release)
-# 	  replaced with _verbose for allowing the script to report some info and
-# 	  soft-errors if the user desires. hard-errors should probably always be
-# 	  reported, right now we just ignore them silently. it is a more-or-less
-# 	  cosmetic issue so not high-priorty but should be done before going beta
-# 	* (possibly optional via _verbose) welcome banner and other startup info
-# 	  and state information should be moved to a sub(). might want to have a
-# 	  command for seeing it (both to check version, but also to check if the
-# 	  script tuns and is collecting info (eg. last collected data, active
-# 	  availble servers, or file error/ok))
 #
 # 	some thoughts on possible future changes?
 #
@@ -110,12 +105,23 @@
 # 	- generating the graphs, i feel should be done externally via cron or
 # 	  Some other means. but i am not against having the script trigger it at
 # 	  intervals in some way
+# 	- info/warn/error reporting is just a short list in memory, it could be
+# 	  be stored to disk to avoid missing errors in lastlog, size of lastlog
+# 	  could be configurable too
 #
 # 	and in case you actually read the code: i use a mix of tabs for indention
 # 	and spaces for alignement. tabs are set to 4 characters. i have also, for
 # 	some reason, attempted to stay within 78 character columns
 #
 # history:
+#
+# 	v0.09 (201805011800) --mh
+# 		- debug release with extra code to hunt down timing issue
+# 		- messages from script are now in lastlog via '/mh_luserstats'
+# 		  (not entirely, still a few to test before moving out of debug)
+# 		- added command '/mh_luserstats' (and removed the welcome banner)
+# 		- added support for scriptassists module and commands scriptinfo
+# 		- minor cosmetic changes to comments and code
 #
 # 	v0.08 (201804292135) --mh
 # 		- hopefully fixed the <timestamp> to be localtime
@@ -130,16 +136,16 @@
 # 	v0.03 (201804240200) --mh
 # 	v0.02 (201804212245) --mh
 # 	v0.01 (201804210000) --mh
-#       - initial pre-alpha release
+# 		- initial pre-alpha release
 #
 ##############################################################################
 
 use strict;
 use warnings;
 
-use File::Path;  # make_path()
-use IO::Handle;  # ->autoflush()
-use Time::Local; # timelocal_nocheck()
+use File::Path ();  # make_path()
+use IO::Handle ();  # ->autoflush()
+use Time::Local (); # timelocal_nocheck()
 
 ##############################################################################
 #
@@ -149,16 +155,18 @@ use Time::Local; # timelocal_nocheck()
 
 use Irssi;
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collect server and network usercounts in CSV files',
-	'changed'     => '201804292135',
+	'changed'     => '201805011800',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
 	'url'         => 'https://github.com/mh-source/irssi-scripts/',
+	'modules'     => 'File::Path IO::Handle Time::Local',
+	'commands'    => 'mh_luserstats',
 );
 
 ##############################################################################
@@ -169,16 +177,21 @@ our %IRSSI   =
 
 our $state = # global state/data information and storage
 {
-	'log'  => # logfile state information
+	'log'     => # logfile state information
 	{
 		'networkname' => undef, # networkname of current filname
 		'servername'  => undef, # servername of current filname
-		'fh'   => undef,        # file-handle
-		'mday' => -1,           # day-of-month for filename and nightly
+		'fh'          => undef, # file-handle
+		'mday'        => -1,    # day-of-month for filename and nightly
 		                        # filename rotation
 	},
-	'data' => # most recently collected data
+	'data'    => # most recently collected data
 	{
+	},
+	'lastlog' => # list of most recent errors/messages
+	{
+		'max' => 42,     # keep at most this many lastlog lines
+		'log' => undef,  # array of lastlog lines
 	},
 };
 
@@ -283,6 +296,43 @@ sub irssi_servers_qstr
 #
 ##############################################################################
 
+sub lastlog
+{
+	#
+	# add new entry to lastlog containing $data. if the log has grown larger
+	# than it is configured to, we remove the older entries
+	#
+	# always returns true
+	#
+	my ($data) = @_;
+
+	#
+	# prefix a timestamp in 'MM/DD HH:mm' format
+	#
+
+	my @now_struct = localtime();
+		# 0    1    2     3     4    5     6     7     8
+		# sec, min, hour, mday, mon, year, wday, yday, isdst
+
+	$data = sprintf('%02d/%02d %02d:%02d'
+			, (1+$now_struct[4]) # month
+			, $now_struct[3]     # day of month
+			, $now_struct[2]     # hour
+			, $now_struct[1]     # minute
+		)
+	 	. '  ' . $data
+	;
+
+	push(@{$state->{'lastlog'}->{'log'}}, $data);
+
+	while (@{$state->{'lastlog'}->{'log'}} > $state->{'lastlog'}->{'max'})
+	{
+		shift(@{$state->{'lastlog'}->{'log'}});
+	}
+
+	return(1);
+}
+
 sub luserstats
 {
 	#
@@ -307,7 +357,6 @@ sub luserstats
 		if ($time_struct[3] != $log->{'mday'}) # day-of-month change or first
 	                                           # write to the file
 		{
-			debug_print('luserstats() day changed. logfile roll-over');
 			# close old file handle
 			close($log->{'fh'}); # this can fail, but out of our hands then
 			$log->{'fh'} = undef;
@@ -315,6 +364,7 @@ sub luserstats
 		elsif (($log->{'networkname'} ne $data->{'networkname'}) or
 		       ($log->{'servername'}  ne $data->{'servername'}))
 		{
+			#TODO: untested condition. when tested (re)move to lastlog
 			debug_print('luserstats() network or server name changed.'
 				. ' logfile re-open');
 			# the server we are logging changed name, close old file handle
@@ -339,7 +389,7 @@ sub luserstats
 			. '/' . $log->{'networkname'}
 			. '/' . $log->{'servername'}
 			. '/' . (1900+$time_struct[5])               # year
-			. '/' . sprintf("%02d", (1+$time_struct[4])) # month (zeropadded)
+			. '/' . sprintf('%02d', (1+$time_struct[4])) # month (zeropadded)
 		;
 
 		File::Path::make_path $filename; # this can fail but we catch that at
@@ -350,6 +400,7 @@ sub luserstats
 
 		if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
 		{
+			#TODO: untested condition. when tested (re)move to lastlog
 			debug_print('luserstats() error! open failed for "' . $filename
 				. '": ' . "$!");
 			$log->{'fh'} = undef;
@@ -373,6 +424,8 @@ sub luserstats
 	{
 		#TODO: might try open the file and write to it once more before
 		#      giving up.
+		#TODO: this should be reported in the script proper and removed
+		#TODO: untested condition. when tested (re)move to lastlog
 		debug_print('luserstats() error! print failed: ' . "$!" );
 		# close old file handle
 		close($log->{'fh'}); # this will probably fail, but meh
@@ -406,7 +459,7 @@ sub next_timeout_luserstats
 
 ##############################################################################
 #
-# Irssi timeouts
+# Irssi timeout handlers
 #
 ##############################################################################
 
@@ -445,7 +498,7 @@ sub timeout_luserstats
 	#
 
 	my ($networkname, $servername, undef) =
-		# '<networkname>/<servername>'
+		# '<networkname>/<server>'
 		# any additional '/' and text following it will be dropped
 		split('/', Irssi::settings_get_str($IRSSI{'name'} . '_server'), 3
 	);
@@ -482,11 +535,8 @@ sub timeout_luserstats
 
 	if (not defined($serverrec)) # no matching server found this time
 	{
-		debug_print('timeout_luserstats() no server match for: "'
-			. Irssi::settings_get_str($IRSSI{'name'} . '_server')  . '"'
-		);
-		debug_print('timeout_luserstats() available servers  : '
-			. irssi_servers_qstr()
+		lastlog('no available server matching "'
+			. Irssi::settings_get_str($IRSSI{'name'} . '_server') . '"'
 		);
 		$state->{'data'} = {};
 		next_timeout_luserstats();
@@ -580,20 +630,192 @@ sub signal_redir_event_numeric
 
 ##############################################################################
 #
+# Irssi command handlers
+#
+##############################################################################
+
+sub command_luserstats
+{
+	#
+	# print version and other useful information
+	#
+	# always returns true
+	#
+	my ($data, $server, $witem) = @_;
+
+	irssi_print('mh_luserstats.pl v' . $VERSION
+		. ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen'
+	);
+
+	irssi_print(' with debug       : '
+		. ((Irssi::settings_get_bool($IRSSI{'name'} . '_debug'))
+		  ? ('ON') : ('OFF'))
+	);
+	irssi_print(' available servers: ' . irssi_servers_qstr);
+
+	irssi_print('type "/SET ' . $IRSSI{'name'} . '" to see all settings');
+
+	my $lastlog_line = 0;
+
+	for my $line (@{$state->{'lastlog'}->{'log'}})
+	{
+		if ($lastlog_line == 0)
+		{
+			irssi_print(' lastlog:');
+		}
+
+		$lastlog_line++;
+
+		irssi_print(' ' . $line);
+	}
+
+	#
+	# trying to hunt down that pesky timestamp issue
+	#
+
+	irssi_print('<debug timestamp>');
+
+	my $time  = time();
+	my $ltstr = localtime();
+	my @ltarr = localtime();
+	my $gtstr = gmtime();
+	my @gtarr = gmtime();
+	my $sysd  = `date`;       chomp($sysd);
+	my $sysu  = `date -u`;    chomp($sysu);
+	my $sysr  = `date -R`;    chomp($sysr);
+	my $syst  = `date +"%s"`; chomp($syst); $syst=int($syst);
+	my $time2 = time();
+	my $tllt  = Time::Local::timelocal(@ltarr);
+	my $tlgt  = Time::Local::timelocal(@gtarr);
+	my $tglt  = Time::Local::timegm(@ltarr);
+	my $tggt  = Time::Local::timegm(@gtarr);
+
+	my @arr_name = qw(se mi hr md mo yr wd yd ds
+	                   -- -- -- -- -- -- -- -- --
+	                  );
+
+	if ($time2 != $time)
+	{
+		irssi_print('WARN : bad timing!');
+	}
+
+	my $ltarrstr = '';
+	my $tmp_cnt     = @ltarr;
+
+	while ($tmp_cnt)
+	{
+		$ltarrstr .= $arr_name[(@ltarr-$tmp_cnt)] . '=' . $ltarr[@ltarr-$tmp_cnt] . ' ';
+		$tmp_cnt--;
+	}
+
+	my $gtarrstr = '';
+	$tmp_cnt        = @gtarr;
+
+	while ($tmp_cnt)
+	{
+		$gtarrstr .= $arr_name[(@gtarr-$tmp_cnt)] . '=' . $gtarr[@gtarr-$tmp_cnt] . ' ';
+		$tmp_cnt--;
+	}
+
+	my $envtz = '<none>';
+
+	if (exists($ENV{'TZ'}))
+	{
+		if (defined($ENV{'TZ'}))
+		{
+			$envtz = '"' . $ENV{'TZ'} . '"';
+		}
+		else
+		{
+			$envtz = '<undf>';
+		}
+	}
+
+	irssi_print('e_tz : ' . $envtz);
+	irssi_print('lt_a : ' . $ltarrstr);
+	irssi_print('gt_a : ' . $gtarrstr);
+	irssi_print('lt() : ' . $ltstr);
+	irssi_print('gt() : ' . $gtstr);
+	irssi_print('sysd : ' . $sysd );
+	irssi_print('sysu : ' . $sysu );
+	irssi_print('sysr : ' . $sysr );
+	irssi_print('time : ' . $time . '  '
+	                                 . (($time==$time) ? ('.... ') : ('???? '))
+	                                 . (($time==$syst) ? ('syst ') : ('     '))
+	                                 . (($time==$tllt) ? ('tllt ') : ('     '))
+	                                 . (($time==$tlgt) ? ('tlgt ') : ('     '))
+	                                 . (($time==$tglt) ? ('tglt ') : ('     '))
+                                     . (($time==$tggt) ? ('tggt ') : ('     '))
+	);
+
+	irssi_print('syst : ' . $syst . '  '
+	                                 . (($syst==$time) ? ('time ') : ('     '))
+	                                 . (($syst==$syst) ? ('.... ') : ('???? '))
+	                                 . (($syst==$tllt) ? ('tllt ') : ('     '))
+	                                 . (($syst==$tlgt) ? ('tlgt ') : ('     '))
+	                                 . (($syst==$tglt) ? ('tglt ') : ('     '))
+                                     . (($syst==$tggt) ? ('tggt ') : ('     '))
+	);
+	irssi_print('tllt : ' . $tllt . '  '
+	                                 . (($tllt==$time) ? ('time ') : ('     '))
+	                                 . (($tllt==$syst) ? ('syst ') : ('     '))
+	                                 . (($tllt==$tllt) ? ('.... ') : ('???? '))
+	                                 . (($tllt==$tlgt) ? ('tlgt ') : ('     '))
+	                                 . (($tllt==$tglt) ? ('tglt ') : ('     '))
+                                     . (($tllt==$tggt) ? ('tggt ') : ('     '))
+	);
+	irssi_print('tlgt : ' . $tlgt . '  '
+	                                 . (($tlgt==$time) ? ('time ') : ('     '))
+	                                 . (($tlgt==$syst) ? ('syst ') : ('     '))
+	                                 . (($tlgt==$tllt) ? ('tllt ') : ('     '))
+	                                 . (($tlgt==$tlgt) ? ('.... ') : ('???? '))
+	                                 . (($tlgt==$tglt) ? ('tglt ') : ('     '))
+                                     . (($tlgt==$tggt) ? ('tggt ') : ('     '))
+	);
+	irssi_print('tglt : ' . $tglt . '  '
+	                                 . (($tglt==$time) ? ('time ') : ('     '))
+	                                 . (($tglt==$syst) ? ('syst ') : ('     '))
+	                                 . (($tglt==$tllt) ? ('tllt ') : ('     '))
+	                                 . (($tglt==$tlgt) ? ('tlgt ') : ('     '))
+	                                 . (($tglt==$tglt) ? ('.... ') : ('???? '))
+                                     . (($tglt==$tggt) ? ('tggt ') : ('     '))
+	);
+	irssi_print('tggt : ' . $tggt . '  '
+	                                 . (($tggt==$time) ? ('time ') : ('     '))
+	                                 . (($tggt==$syst) ? ('syst ') : ('     '))
+	                                 . (($tggt==$tllt) ? ('tllt ') : ('     '))
+	                                 . (($tggt==$tlgt) ? ('tlgt ') : ('     '))
+	                                 . (($tggt==$tglt) ? ('tglt ') : ('     '))
+                                     . (($tggt==$tggt) ? ('.... ') : ('???? '))
+	);
+
+	irssi_print('ltime:' . localtime($time));
+	irssi_print('gtime:' . gmtime($time));
+	irssi_print('lsyst:' . localtime($syst));
+	irssi_print('gsyst:' . gmtime($syst));
+	irssi_print('ltllt:' . localtime($tllt));
+	irssi_print('gtllt:' . gmtime($tllt));
+	irssi_print('ltlgt:' . localtime($tlgt));
+	irssi_print('gtlgt:' . gmtime($tlgt));
+	irssi_print('ltglt:' . localtime($tglt));
+	irssi_print('gtglt:' . gmtime($tglt));
+	irssi_print('ltggt:' . localtime($tggt));
+	irssi_print('gtggt:' . gmtime($tggt));
+
+	irssi_print('</debug timestamp>');
+
+	return(1);
+}
+
+
+##############################################################################
+#
 # on load
 #
 ##############################################################################
 
 #
-# welcome banner
-#
-
-irssi_print('mh_luserstats.pl v' . $VERSION
-	. ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen'
-);
-
-#
-# Irssi settings
+# register Irssi settings
 #
 
 Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_debug',
@@ -607,23 +829,7 @@ Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_server',
 );
 
 #
-# print settings
-#
-
-irssi_print($IRSSI{'name'} . '_debug   = ' .
-	Irssi::settings_get_bool($IRSSI{'name'} . '_debug')
-);
-irssi_print($IRSSI{'name'} . '_datadir = "' .
-	Irssi::settings_get_str($IRSSI{'name'} . '_datadir') .'"'
-);
-irssi_print($IRSSI{'name'} . '_server  = "' .
-	Irssi::settings_get_str($IRSSI{'name'} . '_server') .'"'
-);
-
-irssi_print('servers (active)      : ' . irssi_servers_qstr());
-
-#
-# Irssi command redirection for 'USERS'
+# register Irssi command redirections
 #
 
 Irssi::Irc::Server::redirect_register($IRSSI{'name'} . ' USERS',
@@ -640,17 +846,30 @@ Irssi::Irc::Server::redirect_register($IRSSI{'name'} . ' USERS',
 );
 
 #
-# Irssi signals
+# register Irssi signals
 #
+
 Irssi::signal_add('redir ' . $IRSSI{'name'} . ' event numeric',
 	'signal_redir_event_numeric'
 );
+
+#
+# register Irssi commands
+#
+
+Irssi::command_bind(lc($IRSSI{'name'}), 'command_luserstats', $IRSSI{'name'});
 
 #
 # inital timeout, this sets everything in motion
 #
 
 Irssi::timeout_add_once(100, 'next_timeout_luserstats', undef);
+
+#
+# and put an entry in the lastlog, for good measure
+#
+
+lastlog('script loaded');
 
 1;
 
