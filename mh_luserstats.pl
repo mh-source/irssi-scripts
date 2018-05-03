@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.09 (201805011800)
+# mh_luserstats.pl v0.10 (201805031645)
 #
 # Copyright (c) 2018  Michael Hansen
 #
@@ -26,16 +26,12 @@
 #
 # 	*** <timestamp> format is uncertain and being tested, do not use ***
 #
-# 	note: both datadir layout and CSV file format have changed slightly since
-# 	v0.06 and are no longer compatible. the mh_luserstats_servertag setting
-# 	have gone and replaced by the slightly different mh_luserstats_server
-#
 # 	this will collect luserstats for the local server and global network set
 # 	in mh_luserstats_server (while you are connected to it) into a set of CSV
 # 	files stored under the directory set in mh_luserstats_datadir. the idea
 # 	being these files can be used to generate pretty graphs of usercounts on
 # 	a server and/or network over time. it is currently hardcoded to request
-# 	data once per minute
+# 	data once per minute. the file structure uses local time for its fields
 #
 # 	datadir layout: data/<network>/<server>/<year>/<month>/<dayofmonth>.csv
 #
@@ -46,6 +42,8 @@
 # 	server is in strict rfc1459 mode and it may not be portable across ircds
 #
 # 	CSV file format: <timestamp>,<local>,<local max>,<global>,<global max>
+#
+# 	<timestamp> is in UTC time and ISO 8601 format
 #
 # 	should the script for some reason only collect some of the data and still
 # 	write it to file, the missing fields will have a value of -1
@@ -79,9 +77,9 @@
 # 	there are still a few unfinished parts and rough edges to file down...
 #
 # 	* persistently store all-time max local and global users for the server
-# 	  (this is the next 'big' item. now that we have - i think - settled on
-# 	  format for the data, introducing this extra file should be seamless
+# 	  (this is the next 'big' item.
 # 	* _debug should be for debugging only (and eliminated from the release)
+# 	  and use lastlog for all status information and warnings
 #
 # 	some thoughts on possible future changes?
 #
@@ -114,6 +112,9 @@
 # 	some reason, attempted to stay within 78 character columns
 #
 # history:
+#
+# 	v0.10 (201805031645) --mh
+# 		- changed format of data in CSV files to UTC ISO8601 string
 #
 # 	v0.09 (201805011800) --mh
 # 		- debug release with extra code to hunt down timing issue
@@ -155,12 +156,12 @@ use Time::Local (); # timelocal_nocheck()
 
 use Irssi;
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collect server and network usercounts in CSV files',
-	'changed'     => '201805011800',
+	'changed'     => '201805031645',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -411,11 +412,29 @@ sub luserstats
 	}
 
 	#
+	# convert timestamp to UTC ISO8601 string
+	#
+
+	@time_struct = gmtime($data->{'time'});
+		# 0    1    2     3     4    5     6     7     8
+		# sec, min, hour, mday, mon, year, wday, yday, isdst
+
+
+	my $time_str = sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ',
+	#                     <YYYY>-<MM>-<DD>T<HH>:<mm>:<ss>Z
+		$time_struct[5]+1900, # year
+		$time_struct[4]+1,    # month
+		$time_struct[3],      # day of month
+		$time_struct[2],      # hour
+		$time_struct[1],      # min
+		$time_struct[0]       # sec
+	);
+
+	#
 	# lets get our data stored on file
 	#
 
-	if (not print( { $log->{'fh'} }
-		Time::Local::timelocal_nocheck(@time_struct)
+	if (not print( { $log->{'fh'} } $time_str
 		. ',' . $data->{'users'}->{'local'}->{'current'}
 		. ',' . $data->{'users'}->{'local'}->{'max'}
 		. ',' . $data->{'users'}->{'global'}->{'current'}
@@ -449,10 +468,23 @@ sub next_timeout_luserstats
 	   # 0    1    2     3     4    5     6     7     8
 	   # sec, min, hour, mday, mon, year, wday, yday, isdst
 
-	# add timeout at next    whole minute       (in msecs)
-	Irssi::timeout_add_once((60 - $now_struct[0]) * 1000,
-		'timeout_luserstats', undef
-	);
+	#
+	# add timeout at next whole minute
+	#
+
+	my $timeout = 60;
+
+	if ($now_struct[0] >= $timeout) # in the unlikely event of a leapsecond
+	{
+		$timeout = 1
+	}
+	else
+	{
+		$timeout = $timeout - $now_struct[0];
+	}
+
+	#                    in msec
+	Irssi::timeout_add_once(1000 * $timeout, 'timeout_luserstats', undef);
 
 	return(1);
 }
@@ -668,141 +700,6 @@ sub command_luserstats
 
 		irssi_print(' ' . $line);
 	}
-
-	#
-	# trying to hunt down that pesky timestamp issue
-	#
-
-	irssi_print('<debug timestamp>');
-
-	my $time  = time();
-	my $ltstr = localtime();
-	my @ltarr = localtime();
-	my $gtstr = gmtime();
-	my @gtarr = gmtime();
-	my $sysd  = `date`;       chomp($sysd);
-	my $sysu  = `date -u`;    chomp($sysu);
-	my $sysr  = `date -R`;    chomp($sysr);
-	my $syst  = `date +"%s"`; chomp($syst); $syst=int($syst);
-	my $time2 = time();
-	my $tllt  = Time::Local::timelocal(@ltarr);
-	my $tlgt  = Time::Local::timelocal(@gtarr);
-	my $tglt  = Time::Local::timegm(@ltarr);
-	my $tggt  = Time::Local::timegm(@gtarr);
-
-	my @arr_name = qw(se mi hr md mo yr wd yd ds
-	                   -- -- -- -- -- -- -- -- --
-	                  );
-
-	if ($time2 != $time)
-	{
-		irssi_print('WARN : bad timing!');
-	}
-
-	my $ltarrstr = '';
-	my $tmp_cnt     = @ltarr;
-
-	while ($tmp_cnt)
-	{
-		$ltarrstr .= $arr_name[(@ltarr-$tmp_cnt)] . '=' . $ltarr[@ltarr-$tmp_cnt] . ' ';
-		$tmp_cnt--;
-	}
-
-	my $gtarrstr = '';
-	$tmp_cnt        = @gtarr;
-
-	while ($tmp_cnt)
-	{
-		$gtarrstr .= $arr_name[(@gtarr-$tmp_cnt)] . '=' . $gtarr[@gtarr-$tmp_cnt] . ' ';
-		$tmp_cnt--;
-	}
-
-	my $envtz = '<none>';
-
-	if (exists($ENV{'TZ'}))
-	{
-		if (defined($ENV{'TZ'}))
-		{
-			$envtz = '"' . $ENV{'TZ'} . '"';
-		}
-		else
-		{
-			$envtz = '<undf>';
-		}
-	}
-
-	irssi_print('e_tz : ' . $envtz);
-	irssi_print('lt_a : ' . $ltarrstr);
-	irssi_print('gt_a : ' . $gtarrstr);
-	irssi_print('lt() : ' . $ltstr);
-	irssi_print('gt() : ' . $gtstr);
-	irssi_print('sysd : ' . $sysd );
-	irssi_print('sysu : ' . $sysu );
-	irssi_print('sysr : ' . $sysr );
-	irssi_print('time : ' . $time . '  '
-	                                 . (($time==$time) ? ('.... ') : ('???? '))
-	                                 . (($time==$syst) ? ('syst ') : ('     '))
-	                                 . (($time==$tllt) ? ('tllt ') : ('     '))
-	                                 . (($time==$tlgt) ? ('tlgt ') : ('     '))
-	                                 . (($time==$tglt) ? ('tglt ') : ('     '))
-                                     . (($time==$tggt) ? ('tggt ') : ('     '))
-	);
-
-	irssi_print('syst : ' . $syst . '  '
-	                                 . (($syst==$time) ? ('time ') : ('     '))
-	                                 . (($syst==$syst) ? ('.... ') : ('???? '))
-	                                 . (($syst==$tllt) ? ('tllt ') : ('     '))
-	                                 . (($syst==$tlgt) ? ('tlgt ') : ('     '))
-	                                 . (($syst==$tglt) ? ('tglt ') : ('     '))
-                                     . (($syst==$tggt) ? ('tggt ') : ('     '))
-	);
-	irssi_print('tllt : ' . $tllt . '  '
-	                                 . (($tllt==$time) ? ('time ') : ('     '))
-	                                 . (($tllt==$syst) ? ('syst ') : ('     '))
-	                                 . (($tllt==$tllt) ? ('.... ') : ('???? '))
-	                                 . (($tllt==$tlgt) ? ('tlgt ') : ('     '))
-	                                 . (($tllt==$tglt) ? ('tglt ') : ('     '))
-                                     . (($tllt==$tggt) ? ('tggt ') : ('     '))
-	);
-	irssi_print('tlgt : ' . $tlgt . '  '
-	                                 . (($tlgt==$time) ? ('time ') : ('     '))
-	                                 . (($tlgt==$syst) ? ('syst ') : ('     '))
-	                                 . (($tlgt==$tllt) ? ('tllt ') : ('     '))
-	                                 . (($tlgt==$tlgt) ? ('.... ') : ('???? '))
-	                                 . (($tlgt==$tglt) ? ('tglt ') : ('     '))
-                                     . (($tlgt==$tggt) ? ('tggt ') : ('     '))
-	);
-	irssi_print('tglt : ' . $tglt . '  '
-	                                 . (($tglt==$time) ? ('time ') : ('     '))
-	                                 . (($tglt==$syst) ? ('syst ') : ('     '))
-	                                 . (($tglt==$tllt) ? ('tllt ') : ('     '))
-	                                 . (($tglt==$tlgt) ? ('tlgt ') : ('     '))
-	                                 . (($tglt==$tglt) ? ('.... ') : ('???? '))
-                                     . (($tglt==$tggt) ? ('tggt ') : ('     '))
-	);
-	irssi_print('tggt : ' . $tggt . '  '
-	                                 . (($tggt==$time) ? ('time ') : ('     '))
-	                                 . (($tggt==$syst) ? ('syst ') : ('     '))
-	                                 . (($tggt==$tllt) ? ('tllt ') : ('     '))
-	                                 . (($tggt==$tlgt) ? ('tlgt ') : ('     '))
-	                                 . (($tggt==$tglt) ? ('tglt ') : ('     '))
-                                     . (($tggt==$tggt) ? ('.... ') : ('???? '))
-	);
-
-	irssi_print('ltime:' . localtime($time));
-	irssi_print('gtime:' . gmtime($time));
-	irssi_print('lsyst:' . localtime($syst));
-	irssi_print('gsyst:' . gmtime($syst));
-	irssi_print('ltllt:' . localtime($tllt));
-	irssi_print('gtllt:' . gmtime($tllt));
-	irssi_print('ltlgt:' . localtime($tlgt));
-	irssi_print('gtlgt:' . gmtime($tlgt));
-	irssi_print('ltglt:' . localtime($tglt));
-	irssi_print('gtglt:' . gmtime($tglt));
-	irssi_print('ltggt:' . localtime($tggt));
-	irssi_print('gtggt:' . gmtime($tggt));
-
-	irssi_print('</debug timestamp>');
 
 	return(1);
 }
