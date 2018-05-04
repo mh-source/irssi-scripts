@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.10 (201805031645)
+# mh_luserstats.pl v0.11 (201805050045)
 #
 # Copyright (c) 2018  Michael Hansen
 #
@@ -23,8 +23,6 @@
 # about:
 #
 # 	alpha quality. be carefull! please read documentation before loading
-#
-# 	*** <timestamp> format is uncertain and being tested, do not use ***
 #
 # 	this will collect luserstats for the local server and global network set
 # 	in mh_luserstats_server (while you are connected to it) into a set of CSV
@@ -50,7 +48,7 @@
 #
 # 	the command '/mh_luserstats' will show the script version, information
 # 	about available servers, lastlog of script events (hardcoded to 42), and
-# 	a few other details
+# 	a few other details (to be determined)
 #
 # 	comments, suggestions and bug-reports are welcome
 #
@@ -58,51 +56,38 @@
 #
 # settings:
 #
-# 	mh_luserstats_debug (boolean; default: ON)
-# 		enable/disable debug output
-# 		you should probably leave this on unless you are very confident in my
-# 		coding skills...
-#
 # 	mh_luserstats_datadir (string; default: '<irssi_dir>/mh_luserstats')
-# 		directory under which we store out data files
+# 		directory under which we store our data files
 # 		(<irssi_dir> is '~/.irssi' in a standard configuration of Irssi)
 #
 # 	mh_luserstats_server (string; default: '<network>/<server>')
 # 		server we are getting luserstats from
 # 		for example: /SET mh_luserstats_server IRCnet/irc.psychz.net
-# 		(can be tricky to get right, but mh_luserstats_debug is your friend)
+# 		(can be tricky to get right, but '/mh_luserstats' is your friend)
 #
 # todo:
 #
 # 	there are still a few unfinished parts and rough edges to file down...
 #
 # 	* persistently store all-time max local and global users for the server
-# 	  (this is the next 'big' item.
-# 	* _debug should be for debugging only (and eliminated from the release)
-# 	  and use lastlog for all status information and warnings
+# 	  (this is the next 'big' item)
 #
 # 	some thoughts on possible future changes?
 #
-# 	- <timestamp> could adjustable to some other format and/or timezone
 # 	- the mh_luserstats_server setting could use a simple explanation - but i
-# 	  cant come up with one. i barely know how it works myself :/  but it is
-# 	  not very easy to get this setting right it seems
+# 	  cant come up with one. i barely know how it works myself :/ but it is
+# 	  not easy to get this setting right it seems
 # 	- configurable delay between requests? it currently takes a reading every
 # 	  minute, i feel this is often enough to get usefull data for graphs, but
 # 	  not too often to be a strain on neither the client nor the server
 # 	- 'LUSERS' return more info (including 'USERS') but is that really a job
 # 	  for this script?
 # 	- log multiple servers (either via multiple Irssi connections or via
-# 	  remote requests (ie: 'USERS <someserver>')) this also needs the logfile
-# 	  structure changed slightly and would open several concurrent files. i
-# 	  am also not convinced we need this
+# 	  remote requests (ie: 'USERS <someserver>')). not convinced we need this
 # 	- flushing to files on each write (->autoflush(1)) could be optional, as
 # 	  it is not needed unless we wanna check the CSV files 'live' (ex. for
 # 	  generating per-hour graphs) or possibly to avoid dataloss should the
 # 	  client crash. we could also flush at intervals
-# 	- generating the graphs, i feel should be done externally via cron or
-# 	  Some other means. but i am not against having the script trigger it at
-# 	  intervals in some way
 # 	- info/warn/error reporting is just a short list in memory, it could be
 # 	  be stored to disk to avoid missing errors in lastlog, size of lastlog
 # 	  could be configurable too
@@ -113,24 +98,17 @@
 #
 # history:
 #
+# 	v0.11 (201805050045) --mh
+# 		- debug in Irssi is now gone. use '/mh_luserstats' from now on
+# 		- minor code and comment updates
+#
 # 	v0.10 (201805031645) --mh
 # 		- changed format of data in CSV files to UTC ISO8601 string
 #
 # 	v0.09 (201805011800) --mh
-# 		- debug release with extra code to hunt down timing issue
-# 		- messages from script are now in lastlog via '/mh_luserstats'
-# 		  (not entirely, still a few to test before moving out of debug)
-# 		- added command '/mh_luserstats' (and removed the welcome banner)
-# 		- added support for scriptassists module and commands scriptinfo
-# 		- minor cosmetic changes to comments and code
-#
 # 	v0.08 (201804292135) --mh
-# 		- hopefully fixed the <timestamp> to be localtime
-# 		- cosmetic changes to comments and code
-#
 # 	v0.07 (201804281730) --mh
-# 		- rewrite/cleanup. alpha release
-#
+# 		- alpha release
 # 	v0.06 (201804251140) --mh
 # 	v0.05 (201804240615) --mh
 # 	v0.04 (201804240215) --mh
@@ -156,12 +134,12 @@ use Time::Local (); # timelocal_nocheck()
 
 use Irssi;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
 	'description' => 'collect server and network usercounts in CSV files',
-	'changed'     => '201805031645',
+	'changed'     => '201805050045',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
 	'contact'     => '-',
@@ -185,43 +163,19 @@ our $state = # global state/data information and storage
 		'fh'          => undef, # file-handle
 		'mday'        => -1,    # day-of-month for filename and nightly
 		                        # filename rotation
+		'fname'       => ''     # filename as used in lastlog entries
 	},
 	'data'    => # most recently collected data
 	{
 	},
 	'lastlog' => # list of most recent errors/messages
 	{
-		'max' => 42,     # keep at most this many lastlog lines
-		'log' => undef,  # array of lastlog lines
+		'max'    => 42,     # keep at most this many lastlog lines
+		'log'    => undef,  # array of lastlog lines
+		'old'    => '',     # previous line to compare for repeats
+		'oldcnt' => 0,      # count of old lines (aka repeats)
 	},
 };
-
-##############################################################################
-#
-# debug functions
-#
-##############################################################################
-
-sub debug_print
-{
-	#
-	# print $data to Irssi if debug setting is enabled
-	#
-	# always returns true
-	#
-	my ($data) = @_;
-
-	if (Irssi::settings_get_bool($IRSSI{'name'} . '_debug'))
-	{
-		Irssi::print('dbg: ' . $data,
-			Irssi::MSGLEVEL_CLIENTCRAP |
-			Irssi::MSGLEVEL_NOHILIGHT  |
-			Irssi::MSGLEVEL_NO_ACT
-		);
-	}
-
-	return(1);
-}
 
 ##############################################################################
 #
@@ -300,12 +254,23 @@ sub irssi_servers_qstr
 sub lastlog
 {
 	#
-	# add new entry to lastlog containing $data. if the log has grown larger
-	# than it is configured to, we remove the older entries
+	# add new entry to lastlog containing $data. keep track of repeating
+	# entries and only add once. if the log has grown larger than it is
+	# configured to we remove the older entries
 	#
 	# always returns true
 	#
 	my ($data) = @_;
+
+	#
+	# is this a repeatin error?
+	#
+
+	if ($state->{'lastlog'}->{'old'} eq $data)
+	{
+		$state->{'lastlog'}->{'oldcnt'} += 1;
+		return(1);
+	}
 
 	#
 	# prefix a timestamp in 'MM/DD HH:mm' format
@@ -315,16 +280,33 @@ sub lastlog
 		# 0    1    2     3     4    5     6     7     8
 		# sec, min, hour, mday, mon, year, wday, yday, isdst
 
-	$data = sprintf('%02d/%02d %02d:%02d'
-			, (1+$now_struct[4]) # month
-			, $now_struct[3]     # day of month
-			, $now_struct[2]     # hour
-			, $now_struct[1]     # minute
-		)
-	 	. '  ' . $data
-	;
+	my $ts = sprintf('%02d/%02d %02d:%02d: '
+		, (1+$now_struct[4]) # month
+		, $now_struct[3]     # day of month
+		, $now_struct[2]     # hour
+		, $now_struct[1]     # minute
+	);
 
-	push(@{$state->{'lastlog'}->{'log'}}, $data);
+	#
+	# any old repeats to get rid of?
+	#
+
+	if ($state->{'lastlog'}->{'oldcnt'})
+	{
+		push(@{$state->{'lastlog'}->{'log'}}, $ts
+			. 'previous message repeated ' . $state->{'lastlog'}->{'oldcnt'}
+			. ' times'
+		);
+		$state->{'lastlog'}->{'oldcnt'} = 0;
+	}
+
+	$state->{'lastlog'}->{'old'} = $data;
+
+	push(@{$state->{'lastlog'}->{'log'}}, $ts . $data);
+
+	#
+	# remove old entries if we have more than max
+	#
 
 	while (@{$state->{'lastlog'}->{'log'}} > $state->{'lastlog'}->{'max'})
 	{
@@ -337,7 +319,7 @@ sub lastlog
 sub luserstats
 {
 	#
-	# this is called everytime we have a new set of data in $state
+	# this is called every time we have a new set of data in $state
 	#
 	# always returns true
 	#
@@ -361,16 +343,17 @@ sub luserstats
 			# close old file handle
 			close($log->{'fh'}); # this can fail, but out of our hands then
 			$log->{'fh'} = undef;
+			lastlog('closed file "' . $log->{'fname'} . '" [day changed]');
 		}
 		elsif (($log->{'networkname'} ne $data->{'networkname'}) or
 		       ($log->{'servername'}  ne $data->{'servername'}))
 		{
-			#TODO: untested condition. when tested (re)move to lastlog
-			debug_print('luserstats() network or server name changed.'
-				. ' logfile re-open');
 			# the server we are logging changed name, close old file handle
 			close($log->{'fh'}); # this can fail, but out of our hands then
 			$log->{'fh'} = undef;
+			lastlog('closed file "' . $log->{'fname'}
+				. '" [network/server changed]'
+			);
 		}
 	}
 
@@ -385,30 +368,34 @@ sub luserstats
 		$log->{'mday'}        = $time_struct[3];
 
 		# path part first, so we can create it (aka 'mkdir -p')
-		my $filename = Irssi::settings_get_str($IRSSI{'name'} . '_datadir')
-			. '/data'
-			. '/' . $log->{'networkname'}
-			. '/' . $log->{'servername'}
+		$log->{'fname'} = $log->{'networkname'} . '/' . $log->{'servername'}
 			. '/' . (1900+$time_struct[5])               # year
 			. '/' . sprintf('%02d', (1+$time_struct[4])) # month (zeropadded)
 		;
 
-		File::Path::make_path $filename; # this can fail but we catch that at
+		my $filepath = Irssi::settings_get_str($IRSSI{'name'} . '_datadir')
+			. '/data'
+			. '/' . $log->{'fname'}
+		;
+
+		File::Path::make_path $filepath; # this can fail but we catch that at
 		                                 # open()-time
 
 		# add the filename part
-		$filename .= '/' . sprintf("%02d", $log->{'mday'}) . '.csv';
+		my $filename  = sprintf("%02d", $log->{'mday'}) . '.csv';
+		$log->{'fname'} .= '/' . $filename;
+		$filename        = $filepath . '/' . $filename;
 
 		if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
 		{
-			#TODO: untested condition. when tested (re)move to lastlog
-			debug_print('luserstats() error! open failed for "' . $filename
-				. '": ' . "$!");
+			lastlog('error! open failed "' . $log->{'fname'} . '": ' . "$!");
 			$log->{'fh'} = undef;
 			return(1);
 		}
 
 		$log->{'fh'}->autoflush(1);
+
+		lastlog('opened file "' . $log->{'fname'} . '"');
 	}
 
 	#
@@ -418,7 +405,6 @@ sub luserstats
 	@time_struct = gmtime($data->{'time'});
 		# 0    1    2     3     4    5     6     7     8
 		# sec, min, hour, mday, mon, year, wday, yday, isdst
-
 
 	my $time_str = sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ',
 	#                     <YYYY>-<MM>-<DD>T<HH>:<mm>:<ss>Z
@@ -434,23 +420,15 @@ sub luserstats
 	# lets get our data stored on file
 	#
 
-	if (not print( { $log->{'fh'} } $time_str
+	print( { $log->{'fh'} } $time_str
 		. ',' . $data->{'users'}->{'local'}->{'current'}
 		. ',' . $data->{'users'}->{'local'}->{'max'}
 		. ',' . $data->{'users'}->{'global'}->{'current'}
 		. ',' . $data->{'users'}->{'global'}->{'max'}
-		. "\n"))
-	{
-		#TODO: might try open the file and write to it once more before
-		#      giving up.
-		#TODO: this should be reported in the script proper and removed
-		#TODO: untested condition. when tested (re)move to lastlog
-		debug_print('luserstats() error! print failed: ' . "$!" );
-		# close old file handle
-		close($log->{'fh'}); # this will probably fail, but meh
-		$log->{'fh'} = undef;
-		return(1);
-	}
+		. "\n"
+	); # this should be error-checked, but i couldnt make it fail in quick
+	   # tests. even removing the file it would happilly go on, stat()ing the
+	   # filehandle also didnt return an error. so we are going blind for now
 
 	return(1);
 }
@@ -567,6 +545,14 @@ sub timeout_luserstats
 
 	if (not defined($serverrec)) # no matching server found this time
 	{
+		if (defined($state->{'log'}->{'fh'}))
+		{
+			close $state->{'log'}->{'fh'}; # this can fail, but *shrugs*
+			$state->{'log'}->{'fh'} = undef;
+			lastlog('closed file "' . $state->{'log'}->{'fname'}
+				. '" [no match]'
+			);
+		}
 		lastlog('no available server matching "'
 			. Irssi::settings_get_str($IRSSI{'name'} . '_server') . '"'
 		);
@@ -679,13 +665,7 @@ sub command_luserstats
 		. ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen'
 	);
 
-	irssi_print(' with debug       : '
-		. ((Irssi::settings_get_bool($IRSSI{'name'} . '_debug'))
-		  ? ('ON') : ('OFF'))
-	);
-	irssi_print(' available servers: ' . irssi_servers_qstr);
-
-	irssi_print('type "/SET ' . $IRSSI{'name'} . '" to see all settings');
+	irssi_print(' available servers: ' . irssi_servers_qstr());
 
 	my $lastlog_line = 0;
 
@@ -693,13 +673,23 @@ sub command_luserstats
 	{
 		if ($lastlog_line == 0)
 		{
-			irssi_print(' lastlog:');
+			irssi_print(' lastlog          :');
 		}
 
 		$lastlog_line++;
 
-		irssi_print(' ' . $line);
+		irssi_print('  ' . $line);
 	}
+
+	if (($lastlog_line > 0) and ($state->{'lastlog'}->{'oldcnt'}))
+	{
+		irssi_print(' last message repeated '
+			. $state->{'lastlog'}->{'oldcnt'}  . ' times'
+		);
+	}
+
+	irssi_print('type "/SET ' . $IRSSI{'name'} . '" to see all settings');
+
 
 	return(1);
 }
@@ -715,9 +705,6 @@ sub command_luserstats
 # register Irssi settings
 #
 
-Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_debug',
-	1
-);
 Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_datadir',
 	Irssi::get_irssi_dir() . '/' . $IRSSI{'name'}
 );
@@ -754,7 +741,9 @@ Irssi::signal_add('redir ' . $IRSSI{'name'} . ' event numeric',
 # register Irssi commands
 #
 
-Irssi::command_bind(lc($IRSSI{'name'}), 'command_luserstats', $IRSSI{'name'});
+Irssi::command_bind(lc($IRSSI{'name'}), 'command_luserstats',
+	$IRSSI{'name'}
+);
 
 #
 # inital timeout, this sets everything in motion
