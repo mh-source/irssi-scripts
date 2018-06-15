@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# mh_luserstats.pl v0.11 (201805050045)
+# mh_luserstats.pl v0.12 (201806151944)
 #
 # Copyright (c) 2018  Michael Hansen
 #
@@ -18,113 +18,87 @@
 #
 ##############################################################################
 #
-# collect server and network usercounts in CSV files
+# log server and network user stats
 #
-# about:
+# please read the full instructions below before installing or updating
 #
-# 	alpha quality. be carefull! please read documentation before loading
+# *** IMPORTTANT NOTE if updating ******************************************
 #
-# 	this will collect luserstats for the local server and global network set
-# 	in mh_luserstats_server (while you are connected to it) into a set of CSV
-# 	files stored under the directory set in mh_luserstats_datadir. the idea
-# 	being these files can be used to generate pretty graphs of usercounts on
-# 	a server and/or network over time. it is currently hardcoded to request
-# 	data once per minute. the file structure uses local time for its fields
+# neither logfiles nor settings from previous versions can be used. although
+# logfiles are now stored in a different (but similiar) directory, you are
+# strongly encouraged to make a backup of them. the old settings also do not
+# conflict with the new, you are still adviced to start with a clean slate
 #
-# 	datadir layout: data/<network>/<server>/<year>/<month>/<dayofmonth>.csv
+# logfile path changed from '<irssi_dir>/mh_luserstats/data' to a plain
+# '<irssi_dir>/mh_luserstats'
 #
-# 	<month> and <dayofmonth> are zeropadded numbers
+# the old setting 'mh_luserstats_server' is now just 'mh_luserstats' and all
+# other settings are gone
 #
-# 	the collected data is local, and global usercounts and their max values
-# 	as returned by the server 'USERS' command. this will not work if the
-# 	server is in strict rfc1459 mode and it may not be portable across ircds
+# **************************************************************************
 #
-# 	CSV file format: <timestamp>,<local>,<local max>,<global>,<global max>
+# this script will request user counts from the configured server every minute
+# and store the values in a set of CSV files. it keeps track of current users,
+# current maximum users, and all-time maximum users for the local server and
+# the global network. this is done using the IRC command USERS in non-rfc mode
+# as used on several ircds. written primarilly for IRCnet/irc.psychz.net to
+# generate pretty graphs of users over time based on the stored user counts
 #
-# 	<timestamp> is in UTC time and ISO 8601 format
+# once loaded, the script will look for irssi connections to a server matching
+# the setting 'mh_luserstats' (not set by default. you will have to set this
+# before the script will work). if a connection is found it will send requests
+# to the server and store the replies. you can see current status and lastlog
+# of events/errors with the command '/mh_luserstats'. if copy-pasting from the
+# connected servers in the command to the 'mh_luserstats' setting, do not copy
+# the quotes too. the command to set the server setting should look something
+# like '/set mh_luserstats IRCnet/irc.psychz.net'
 #
-# 	should the script for some reason only collect some of the data and still
-# 	write it to file, the missing fields will have a value of -1
+# logfile dir: <irssi_dir>/mh_luserstats/<network>/<address>/<year>/<month>
 #
-# 	the command '/mh_luserstats' will show the script version, information
-# 	about available servers, lastlog of script events (hardcoded to 42), and
-# 	a few other details (to be determined)
+# <irssi_dir> is usually '~/.irssi' but not necessarily. <year> and <month> in
+# local time and <month> is zeropadded
 #
-# 	comments, suggestions and bug-reports are welcome
+# logfile name: <day of month>.csv
 #
-# 	-- Michael Hansen
+# <day of month> is zeropadded. file is automatically rolled over
+# at midnight. in local time
+#
+# logfile CSV format: <time>,<l cur>,<l max>,<l mmx>,<g cur>,<g max>,<g mmx>
+#
+# <time> in UTC and ISO8601 format, then local and then global current users,
+# maximum users and all-time maximum maximum users.
+#
+# commands:
+#
+#	/mh_luserstats
+#
+#		will show you the script version information, followed by a lastlog of
+#		script events/errors. then user stats and status, possibly followed by
+#		the server setting and/or active connections, if they do not match the
+#		current user stats
 #
 # settings:
 #
-# 	mh_luserstats_datadir (string; default: '<irssi_dir>/mh_luserstats')
-# 		directory under which we store our data files
-# 		(<irssi_dir> is '~/.irssi' in a standard configuration of Irssi)
-#
-# 	mh_luserstats_server (string; default: '<network>/<server>')
-# 		server we are getting luserstats from
-# 		for example: /SET mh_luserstats_server IRCnet/irc.psychz.net
-# 		(can be tricky to get right, but '/mh_luserstats' is your friend)
-#
-# todo:
-#
-# 	there are still a few unfinished parts and rough edges to file down...
-#
-# 	* persistently store all-time max local and global users for the server
-# 	  (this is the next 'big' item)
-#
-# 	some thoughts on possible future changes?
-#
-# 	- the mh_luserstats_server setting could use a simple explanation - but i
-# 	  cant come up with one. i barely know how it works myself :/ but it is
-# 	  not easy to get this setting right it seems
-# 	- configurable delay between requests? it currently takes a reading every
-# 	  minute, i feel this is often enough to get usefull data for graphs, but
-# 	  not too often to be a strain on neither the client nor the server
-# 	- 'LUSERS' return more info (including 'USERS') but is that really a job
-# 	  for this script?
-# 	- log multiple servers (either via multiple Irssi connections or via
-# 	  remote requests (ie: 'USERS <someserver>')). not convinced we need this
-# 	- flushing to files on each write (->autoflush(1)) could be optional, as
-# 	  it is not needed unless we wanna check the CSV files 'live' (ex. for
-# 	  generating per-hour graphs) or possibly to avoid dataloss should the
-# 	  client crash. we could also flush at intervals
-# 	- info/warn/error reporting is just a short list in memory, it could be
-# 	  be stored to disk to avoid missing errors in lastlog, size of lastlog
-# 	  could be configurable too
-#
-# 	and in case you actually read the code: i use a mix of tabs for indention
-# 	and spaces for alignement. tabs are set to 4 characters. i have also, for
-# 	some reason, attempted to stay within 78 character columns
+#	mh_luserstats (string, default "")
+#		server to log user stats on, see connected servers in '/mh_luserstats'
 #
 # history:
 #
-# 	v0.11 (201805050045) --mh
-# 		- debug in Irssi is now gone. use '/mh_luserstats' from now on
-# 		- minor code and comment updates
-#
-# 	v0.10 (201805031645) --mh
-# 		- changed format of data in CSV files to UTC ISO8601 string
-#
-# 	v0.09 (201805011800) --mh
-# 	v0.08 (201804292135) --mh
-# 	v0.07 (201804281730) --mh
-# 		- alpha release
-# 	v0.06 (201804251140) --mh
-# 	v0.05 (201804240615) --mh
-# 	v0.04 (201804240215) --mh
-# 	v0.03 (201804240200) --mh
-# 	v0.02 (201804212245) --mh
-# 	v0.01 (201804210000) --mh
-# 		- initial pre-alpha release
+#	v0.12 (201806151944) --mh
+#		- alpha 2
+#		- rewrite of previous version. only added is reading all-time max
+#         value from older logfiles to keep it between server restarts
+#		- old logfiles and settings can not be used. please backup files and
+#		  start with a clean config if possible (no conflicts, just cleaner)
 #
 ##############################################################################
 
 use strict;
 use warnings;
 
-use File::Path ();  # make_path()
-use IO::Handle ();  # ->autoflush()
-use Time::Local (); # timelocal_nocheck()
+use File::Path ();
+use IO::Handle ();
+use Time::Local ();
 
 ##############################################################################
 #
@@ -132,20 +106,20 @@ use Time::Local (); # timelocal_nocheck()
 #
 ##############################################################################
 
-use Irssi;
+use Irssi ();
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 our %IRSSI   =
 (
 	'name'        => 'mh_luserstats',
-	'description' => 'collect server and network usercounts in CSV files',
-	'changed'     => '201805050045',
+	'description' => 'log server and network user stats',
+	'changed'     => '201806151944',
 	'license'     => 'ISC/BSD',
 	'authors'     => 'Michael Hansen',
-	'contact'     => '-',
+	'contact'     => '',
 	'url'         => 'https://github.com/mh-source/irssi-scripts/',
-	'modules'     => 'File::Path IO::Handle Time::Local',
 	'commands'    => 'mh_luserstats',
+	'modules'     => 'File::Path IO::Handle Time::Local',
 );
 
 ##############################################################################
@@ -154,96 +128,11 @@ our %IRSSI   =
 #
 ##############################################################################
 
-our $state = # global state/data information and storage
-{
-	'log'     => # logfile state information
-	{
-		'networkname' => undef, # networkname of current filname
-		'servername'  => undef, # servername of current filname
-		'fh'          => undef, # file-handle
-		'mday'        => -1,    # day-of-month for filename and nightly
-		                        # filename rotation
-		'fname'       => ''     # filename as used in lastlog entries
-	},
-	'data'    => # most recently collected data
-	{
-	},
-	'lastlog' => # list of most recent errors/messages
-	{
-		'max'    => 42,     # keep at most this many lastlog lines
-		'log'    => undef,  # array of lastlog lines
-		'old'    => '',     # previous line to compare for repeats
-		'oldcnt' => 0,      # count of old lines (aka repeats)
-	},
-};
+our $lastlog;         # lastlog messages structure
+our $luserstats;      # luserstats information and collected data structure
+our $luserstats_data; # luserstats in-progress data collection structure
 
-##############################################################################
-#
-# Irssi functions
-#
-##############################################################################
-
-sub irssi_print
-{
-	#
-	# print $data to Irssi
-	#
-	# always returns true
-	#
-	my ($data) = @_;
-
-	Irssi::print($data,
-		Irssi::MSGLEVEL_CRAP      |
-		Irssi::MSGLEVEL_NOHILIGHT |
-		Irssi::MSGLEVEL_NO_ACT
-	);
-
-	return(1);
-}
-
-sub irssi_servers_qstr
-{
-	#
-	# returns a sorted string of current network/servername pairs, space
-	# separated, and individually quoted in doublequotes. if there are no
-	# servers the string contains the unquoted word '<none>'
-	#
-
-	my $string = '';
-
-	for my $serverrec (sort { $a->{'tag'} cmp $b->{'tag'} } Irssi::servers())
-	{
-		if (ref($serverrec) eq 'Irssi::Irc::Server') # only want irc servers
-		{
-			if (not $serverrec->{'connected'}) # only connected servers so we
-			{                                  # can trust the 'real_address'
-				next;
-			}
-
-			if ($string ne '') # prefix a space unless first servertag
-			{
-				$string .= ' '
-			}
-
-			my $chatnet = $serverrec->{'chatnet'};
-
-			if ($chatnet eq '') # if server has no network, use tag instead
-			{
-				$chatnet = $serverrec->{'tag'};
-			}
-
-			$string .= '"' . $chatnet . '/'
-			               . $serverrec->{'real_address'} . '"';
-		}
-	}
-
-	if ($string eq '') # no servers found
-	{
-		return('<none>');
-	}
-
-	return($string);
-}
+our $lc_irssi_name = lc($IRSSI{'name'});
 
 ##############################################################################
 #
@@ -251,67 +140,510 @@ sub irssi_servers_qstr
 #
 ##############################################################################
 
-sub lastlog
+sub get_serverrecs
 {
 	#
-	# add new entry to lastlog containing $data. keep track of repeating
-	# entries and only add once. if the log has grown larger than it is
-	# configured to we remove the older entries
+	# returns an array of connected irc serverrecs
+	#
+
+	my @serverrecs;
+
+	for my $serverrec (Irssi::servers())
+	{
+		if (ref($serverrec) ne 'Irssi::Irc::Server')
+		{
+			#
+			# not an irc server
+			#
+
+			next;
+		}
+
+		if (not $serverrec->{'connected'})
+		{
+			#
+			# server not connected
+			#
+
+			next;
+		}
+
+		push(@serverrecs, $serverrec);
+
+		next;
+	}
+
+	return(@serverrecs);
+}
+
+sub get_serverrec_name
+{
+	#
+	# returns server name of the given serverrec
+	#
+	my ($serverrec) = @_;
+
+	if ($serverrec->{'chatnet'} eq '')
+	{
+		#
+		# no chatnet for this server, use tag
+		#
+
+		return($serverrec->{'tag'} . '/' . $serverrec->{'real_address'});
+	}
+
+	return($serverrec->{'chatnet'} . '/' . $serverrec->{'real_address'});
+}
+
+##############################################################################
+#
+# script lastlog functions
+#
+##############################################################################
+
+sub lastlog_reset
+{
+	#
+	# reset global lastlog structure
 	#
 	# always returns true
 	#
-	my ($data) = @_;
 
-	#
-	# is this a repeatin error?
-	#
-
-	if ($state->{'lastlog'}->{'old'} eq $data)
+	$lastlog =
 	{
-		$state->{'lastlog'}->{'oldcnt'} += 1;
+		'max'      => 42,    # maximum number of messages kept (0 is unlimited)
+		'messages' => undef, # array of messages
+	};
+
+	return(1);
+}
+
+sub lastlog_prune
+{
+	#
+	# removes oldest messages if lastlog too long
+	#
+	# calls to this should be wrapped in 'if ($lastlog->{'max'})'
+	#
+	# always returns true
+	#
+
+	while (@{$lastlog->{'messages'}} > $lastlog->{'max'})
+	{
+		shift(@{$lastlog->{'messages'}});
+
+		next;
+	}
+
+	return(1);
+}
+
+sub lastlog
+{
+	#
+	# write a new message to the lastlog
+	#
+	# always returns true
+	#
+	my ($message) = @_;
+
+	#
+	# timestamp message
+	#
+
+	my @now_struct = localtime();
+	my $message_ts = sprintf('%02d/%02d %02d:%02d:%02d: ', (1+$now_struct[4]), $now_struct[3], $now_struct[2], $now_struct[1], $now_struct[0]);
+	#                         <MM>/<DD> <hh>:<mm>:<ss>:        month            day of month    hour            minute          second
+
+	#
+	# append timestamp and message to lastlog
+	#
+
+	push(@{$lastlog->{'messages'}}, $message_ts . $message);
+
+	#
+	# remove oldest messages if lastlog too long
+	#
+
+	if ($lastlog->{'max'})
+	{
+		lastlog_prune();
+	}
+
+	return(1);
+}
+
+##############################################################################
+#
+# script luserstats functions
+#
+##############################################################################
+
+sub luserstats_reset_data
+{
+	#
+	# reset global luserstats in-progress data structure and set the 'time'
+	# field to now
+	#
+	# always returns true
+	#
+
+	$luserstats_data =
+	{
+		'time'   => time(), # time of data request
+		'server' => '',     # server of data reply
+		'local'  =>         # local usercount server now and server max from data reply
+		{
+			'now' => -1,
+			'max' => -1,
+		},
+		'global' =>         # global usercount network now and server max from data reply
+		{
+			'now' => -1,
+			'max' => -1,
+		},
+	};
+
+	return(1);
+}
+
+sub luserstats_reset
+{
+	#
+	# reset global luserstats structure
+	#
+	# always returns true
+	#
+
+	$luserstats =
+	{
+		'server' => undef, # server of current logfile and where data is expected from
+		'fh'     => undef, # current file handle
+		'mday'   => -1,    # day-of-month, for logfile name and daily rotation
+		'fname'  => '',    # filename used in lastlog messages
+		'local'  =>        # local usercount server now, server max, and maximum max
+		{
+			'now' => -1,
+			'max' => -1,
+			'mmx' => -1,
+		},
+		'global' =>        # global usercount server now, server max, and maximum max
+		{
+			'now' => -1,
+			'max' => -1,
+			'mmx' => -1,
+		},
+		'time'   => 0,
+	};
+
+	return(1);
+}
+
+sub luserstats_reload
+{
+	#
+	# see if theres any previously stored values to use for maximum maximum
+	# number of users. this done by attempting to read the most recent CSV
+	# logfile for the current server, if any can be found
+	#
+	# always returns true
+	#
+
+	my $filepath = Irssi::get_irssi_dir() . '/' . $lc_irssi_name;
+
+	#
+	# first see if we got a server subdirectory
+	#
+
+	my $fname    = $luserstats->{'server'};
+	my $filename = $filepath . '/' . $fname;
+
+	if (opendir(my $dh, $filename))
+	{
+		#
+		# get a reverse sorted list of year subdirectories, then dive into them
+		#
+
+		my @subdirs_year = sort({ $b cmp $a } grep { /^[0-9]{4}$/ } readdir($dh));
+		closedir($dh);
+
+		for my $subdir_year (@subdirs_year)
+		{
+			$fname    = $luserstats->{'server'} . '/' . $subdir_year;
+			$filename = $filepath . '/' . $fname;
+
+			if (not -d $filename)
+			{
+				#
+				# not a directory
+				#
+
+				next;
+			}
+
+			if (not opendir($dh, $filename))
+			{
+				#
+				# couldnt open directory
+				#
+
+				next;
+			}
+
+			#
+			# get a reverse sorted list of month subdirectories, then dive into them
+			#
+
+			my @subdirs_month = sort { $b cmp $a } grep { /^[0-9]{2}$/ } readdir($dh);
+			closedir($dh);
+
+			for my $subdir_month (@subdirs_month)
+			{
+				$fname    = $luserstats->{'server'} . '/' . $subdir_year . '/' . $subdir_month;
+				$filename = $filepath . '/' . $fname;
+
+				if (not -d $filename)
+				{
+					#
+					# not a directory
+					#
+
+					next;
+				}
+
+				if (not opendir($dh, $filename))
+				{
+					#
+					# couldnt open directory
+					#
+
+					next;
+				}
+
+				#
+				# get a reverse sorted list of day-of-month CSV logfiles, then
+				# try to data from them, return result on first hit if any
+				#
+
+				my @files_mday = sort { $b cmp $a } grep { /^[0-9]{2}.csv$/ } readdir($dh);
+				closedir($dh);
+
+				for my $file_mday (@files_mday)
+				{
+					$fname    = $luserstats->{'server'} . '/' . $subdir_year . '/' . $subdir_month . '/' . $file_mday;
+					$filename = $filepath . '/' . $fname;
+
+					#
+					# try to open file, go to next on failure
+					#
+
+					if (not open($dh, '<:encoding(UTF-8)', $filename))
+					{
+						#
+						# couldnt open file
+						#
+
+						next;
+					}
+
+					#
+					# read the last line from the file and see if it contains usable data
+					#
+
+					my $line     = '';
+					my $lastline = '';
+
+					while (defined($line = readline($dh)))
+					{
+						chomp($line);
+						$lastline = $line;
+
+						next;
+					}
+
+					close($dh);
+
+					if ($lastline =~ m/^[0-9TZ:-]{20},(-?\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)$/)
+					{
+						#
+						# a match for our CSV data. update global luserstats
+						# data structure and return
+						#
+
+						my $mmx =
+						{
+							'local'  => int($3),
+							'global' => int($6),
+						};
+
+						for my $type ('local', 'global')
+						{
+							if ($luserstats->{$type}->{'mmx'} < $mmx->{$type})
+							{
+								$luserstats->{$type}->{'mmx'} = $mmx->{$type};
+							}
+
+							next;
+						}
+
+						return(1);
+					}
+
+					#
+					# data in file didnt match, try next file
+					#
+
+					next;
+				}
+
+				#
+				# nothing usable in this day-of-month directory, try the next one
+				#
+
+				next;
+			}
+
+			#
+			# nothing usable in this year directory, try the next one
+			#
+
+			next;
+		}
+	}
+
+	return(1);
+}
+
+sub luserstats_file_close
+{
+	#
+	# close the luserstats file handle
+	#
+	# always returns true
+	#
+
+	close($luserstats->{'fh'});
+	$luserstats->{'fh'} = undef;
+
+	return(1);
+}
+
+sub luserstats_file_open
+{
+	#
+	# open the luserstats file handle
+	#
+	# always returns true
+	#
+
+	my $filepath = Irssi::get_irssi_dir() . '/' . $lc_irssi_name . '/' . $luserstats->{'fname'};
+
+	#
+	# create stored data directory
+	#
+
+	File::Path::make_path $filepath; # 'mkdir -p', can fail but will be caught on open()
+
+	#
+	# set the logfile filename and open it
+	#
+
+	my $filename = sprintf("/%02d.csv", $luserstats->{'mday'});
+
+	$luserstats->{'fname'} .= $filename;
+	$filename               = $filepath . $filename;
+
+	if (not open($luserstats->{'fh'}, '>>:encoding(UTF-8)', $filename))
+	{
+		#
+		# open failed
+		#
+
+		lastlog('error! open failed "' . $luserstats->{'fname'} . '": ' . "$!");
+		luserstats_file_close();
+
 		return(1);
 	}
 
 	#
-	# prefix a timestamp in 'MM/DD HH:mm' format
+	# set the logfile to flush on every write
 	#
 
-	my @now_struct = localtime();
-		# 0    1    2     3     4    5     6     7     8
-		# sec, min, hour, mday, mon, year, wday, yday, isdst
+	$luserstats->{'fh'}->autoflush(1);
 
-	my $ts = sprintf('%02d/%02d %02d:%02d: '
-		, (1+$now_struct[4]) # month
-		, $now_struct[3]     # day of month
-		, $now_struct[2]     # hour
-		, $now_struct[1]     # minute
-	);
+	return(1);
+}
 
+sub luserstats_serverrec
+{
 	#
-	# any old repeats to get rid of?
+	# get the serverrec matching current setting
+	#
+	# returns the Irssi serverrec on success or undef on failure
 	#
 
-	if ($state->{'lastlog'}->{'oldcnt'})
+	my $lc_setting = lc(Irssi::settings_get_str($lc_irssi_name));
+
+	for my $serverrec (get_serverrecs())
 	{
-		push(@{$state->{'lastlog'}->{'log'}}, $ts
-			. 'previous message repeated ' . $state->{'lastlog'}->{'oldcnt'}
-			. ' times'
-		);
-		$state->{'lastlog'}->{'oldcnt'} = 0;
+		if (lc(get_serverrec_name($serverrec)) ne $lc_setting)
+		{
+			#
+			# wrong network/server
+			#
+
+			next;
+		}
+
+		#
+		# we got a match
+		#
+
+		return($serverrec);
 	}
 
-	$state->{'lastlog'}->{'old'} = $data;
-
-	push(@{$state->{'lastlog'}->{'log'}}, $ts . $data);
-
 	#
-	# remove old entries if we have more than max
+	# no match
 	#
 
-	while (@{$state->{'lastlog'}->{'log'}} > $state->{'lastlog'}->{'max'})
+	return(undef);
+}
+
+sub luserstats_next_timeout
+{
+	#
+	# calculate how long time until next timeout should occur and add an Irssi
+	# timeout for it
+	#
+	# always returns true
+	#
+
+	my @now_struct   = localtime();
+	my $timeout_secs = 60;
+
+	#
+	# next whole minute happens in...
+	#
+
+	if ($now_struct[0] < $timeout_secs)
 	{
-		shift(@{$state->{'lastlog'}->{'log'}});
+		$timeout_secs = $timeout_secs - $now_struct[0];
 	}
+	else
+	{
+		#
+		# leapsecond
+		#
+
+		$timeout_secs = 1;
+	}
+
+	#
+	# add next timeout_luserstats timeout to Irssi
+	#
+
+	Irssi::timeout_add_once(1000 * $timeout_secs, 'timeout_luserstats', undef);
+	#                    in msec
 
 	return(1);
 }
@@ -319,41 +651,38 @@ sub lastlog
 sub luserstats
 {
 	#
-	# this is called every time we have a new set of data in $state
+	# this is called every time we have a new set of data collected
 	#
 	# always returns true
 	#
 
-	my $log  = $state->{'log'};
-	my $data = $state->{'data'};
+	my @time_struct = localtime($luserstats_data->{'time'});
 
 	#
-	# do we need to roll over to or open a new logfile
+	# do we have an open logfile that needs to be closed?
 	#
 
-	my @time_struct = localtime($data->{'time'});
-	   # 0    1    2     3     4    5     6     7     8
-	   # sec, min, hour, mday, mon, year, wday, yday, isdst
-
-	if (defined($log->{'fh'}))
+	if ($luserstats->{'fh'})
 	{
-		if ($time_struct[3] != $log->{'mday'}) # day-of-month change or first
-	                                           # write to the file
+		if (lc($luserstats_data->{'server'}) ne lc($luserstats->{'server'}))
 		{
-			# close old file handle
-			close($log->{'fh'}); # this can fail, but out of our hands then
-			$log->{'fh'} = undef;
-			lastlog('closed file "' . $log->{'fname'} . '" [day changed]');
+			#
+			# new data from a new server
+			#
+
+			luserstats_file_close();
+			lastlog('log closed "' . $luserstats->{'fname'} . '": server changed');
+
+			luserstats_reset();
 		}
-		elsif (($log->{'networkname'} ne $data->{'networkname'}) or
-		       ($log->{'servername'}  ne $data->{'servername'}))
+		elsif ($luserstats->{'mday'} != $time_struct[3])
 		{
-			# the server we are logging changed name, close old file handle
-			close($log->{'fh'}); # this can fail, but out of our hands then
-			$log->{'fh'} = undef;
-			lastlog('closed file "' . $log->{'fname'}
-				. '" [network/server changed]'
-			);
+			#
+			# local day changed
+			#
+
+			luserstats_file_close();
+			lastlog('log closed "' . $luserstats->{'fname'} . '": day changed');
 		}
 	}
 
@@ -361,108 +690,509 @@ sub luserstats
 	# open logfile if needed
 	#
 
-	if (not defined($log->{'fh'}))
+	if (not $luserstats->{'fh'})
 	{
-		$log->{'networkname'} = $data->{'networkname'};
-		$log->{'servername'}  = $data->{'servername'};
-		$log->{'mday'}        = $time_struct[3];
-
-		# path part first, so we can create it (aka 'mkdir -p')
-		$log->{'fname'} = $log->{'networkname'} . '/' . $log->{'servername'}
-			. '/' . (1900+$time_struct[5])               # year
-			. '/' . sprintf('%02d', (1+$time_struct[4])) # month (zeropadded)
-		;
-
-		my $filepath = Irssi::settings_get_str($IRSSI{'name'} . '_datadir')
-			. '/data'
-			. '/' . $log->{'fname'}
-		;
-
-		File::Path::make_path $filepath; # this can fail but we catch that at
-		                                 # open()-time
-
-		# add the filename part
-		my $filename  = sprintf("%02d", $log->{'mday'}) . '.csv';
-		$log->{'fname'} .= '/' . $filename;
-		$filename        = $filepath . '/' . $filename;
-
-		if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
+		if (defined($luserstats->{'server'}))
 		{
-			lastlog('error! open failed "' . $log->{'fname'} . '": ' . "$!");
-			$log->{'fh'} = undef;
+			#
+			# there is already data stored, make sure the new data is for the
+			# same server
+			#
+
+			if (lc($luserstats_data->{'server'}) ne lc($luserstats->{'server'}))
+			{
+				#
+				# new data from a new server, clear stored data
+				#
+
+				lastlog('server changed');
+				luserstats_reset();
+			}
+		}
+
+		#
+		# initialise data
+		#
+
+		if (not defined($luserstats->{'server'}))
+		{
+			#
+			# new server, see if we got stored maximum values
+			#
+
+			$luserstats->{'server'} = $luserstats_data->{'server'};
+			luserstats_reload();
+		}
+
+		$luserstats->{'mday'}  = $time_struct[3];
+		$luserstats->{'fname'} = $luserstats_data->{'server'} . '/' . (1900+$time_struct[5]) . '/'. sprintf('%02d', (1+$time_struct[4]));
+		#                                                              year                          month (zeropadded)
+
+		#
+		# open logfile
+		#
+
+		luserstats_file_open();
+
+		if (not $luserstats->{'fh'})
+		{
+			#
+			# open failed
+			#
+
 			return(1);
 		}
 
-		$log->{'fh'}->autoflush(1);
-
-		lastlog('opened file "' . $log->{'fname'} . '"');
+		lastlog('log opened "' . $luserstats->{'fname'} . '"');
 	}
 
 	#
-	# convert timestamp to UTC ISO8601 string
+	# create an UTC ISO8601 timestamp for new data
 	#
 
-	@time_struct = gmtime($data->{'time'});
-		# 0    1    2     3     4    5     6     7     8
-		# sec, min, hour, mday, mon, year, wday, yday, isdst
-
-	my $time_str = sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ',
-	#                     <YYYY>-<MM>-<DD>T<HH>:<mm>:<ss>Z
-		$time_struct[5]+1900, # year
-		$time_struct[4]+1,    # month
-		$time_struct[3],      # day of month
-		$time_struct[2],      # hour
-		$time_struct[1],      # min
-		$time_struct[0]       # sec
-	);
+	$luserstats->{'time'} = $luserstats_data->{'time'};
+	@time_struct = gmtime($luserstats->{'time'});
+	my $data_ts  = sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ', (1900+$time_struct[5]), (1+$time_struct[4]), $time_struct[3], $time_struct[2], $time_struct[1], $time_struct[0]);
+	#                     <YYYY>-<MM>-<DD>T<HH>:<mm>:<ss>Z          year                 month             day of month     hour             minute           second
 
 	#
-	# lets get our data stored on file
+	# create a CSV string of current data after updating it with new data values
 	#
 
-	print( { $log->{'fh'} } $time_str
-		. ',' . $data->{'users'}->{'local'}->{'current'}
-		. ',' . $data->{'users'}->{'local'}->{'max'}
-		. ',' . $data->{'users'}->{'global'}->{'current'}
-		. ',' . $data->{'users'}->{'global'}->{'max'}
-		. "\n"
-	); # this should be error-checked, but i couldnt make it fail in quick
-	   # tests. even removing the file it would happilly go on, stat()ing the
-	   # filehandle also didnt return an error. so we are going blind for now
+	my $data = '';
+
+	for my $type ('local', 'global')
+	{
+		$luserstats->{$type}->{'now'} = $luserstats_data->{$type}->{'now'};
+		$luserstats->{$type}->{'max'} = $luserstats_data->{$type}->{'max'};
+
+		if ($luserstats->{$type}->{'mmx'} < $luserstats_data->{$type}->{'max'})
+		{
+			#
+			# maximum max increased
+			#
+
+			$luserstats->{$type}->{'mmx'} = $luserstats_data->{$type}->{'max'};
+		}
+
+		#
+		# append values to string
+		#
+
+		$data .= ',' . $luserstats->{$type}->{'now'} . ',' . $luserstats->{$type}->{'max'} . ',' . $luserstats->{$type}->{'mmx'};
+
+		next;
+	}
+
+	#
+	# write timestamp and data to logfile
+	#
+
+	print( { $luserstats->{'fh'} } $data_ts . $data . "\n");
 
 	return(1);
 }
 
-sub next_timeout_luserstats
+##############################################################################
+#
+# Irssi command handlers
+#
+##############################################################################
+
+sub command_luserstats
 {
 	#
-	# calculate how long time until next timeout_luserstats() and
-	# add an Irssi timeout for it
+	# print script version and other information
 	#
 	# always returns true
 	#
+	my ($data, $server, $witem) = @_;
 
-	my @now_struct = localtime();
-	   # 0    1    2     3     4    5     6     7     8
-	   # sec, min, hour, mday, mon, year, wday, yday, isdst
+	Irssi::print('mh_luserstats.pl v' . $VERSION . ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
 
 	#
-	# add timeout at next whole minute
+	# print lastlog messages
 	#
 
-	my $timeout = 60;
-
-	if ($now_struct[0] >= $timeout) # in the unlikely event of a leapsecond
+	if (@{$lastlog->{'messages'}})
 	{
-		$timeout = 1
+		Irssi::print(' lastlog', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+		for my $message (@{$lastlog->{'messages'}})
+		{
+			Irssi::print('  ' . $message, Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+			next;
+		}
+	}
+
+	#
+	# print userstats data and/or server and connections status
+	#
+
+	my @servers = get_serverrecs();
+
+	if (@servers)
+	{
+		#
+		# first put all servers in a hash to avoid duplicates in the list
+		#
+
+		my $servernames = {};
+
+		for my $serverrec (@servers)
+		{
+			my $servername = get_serverrec_name($serverrec);
+			$servernames->{lc($servername)} = $servername;
+
+			next;
+		}
+
+		#
+		# make the sorted server list
+		#
+
+		@servers = ();
+
+		for my $server (sort { $a cmp $b } keys(%{$servernames}))
+		{
+			push(@servers, $servernames->{$server});
+
+			next;
+		}
+	}
+
+	my $serversetting    = Irssi::settings_get_str($lc_irssi_name);
+	my $serverrec        = luserstats_serverrec();
+	my $server_matchdata = 0;
+
+	if (defined($luserstats->{'server'}))
+	{
+		if (lc($luserstats->{'server'}) eq lc($serversetting))
+		{
+			#
+			# server setting matches data server
+			#
+
+			$server_matchdata  = 1;
+		}
+	}
+
+	Irssi::print(' userstats', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+	#
+	# print data if available
+	#
+
+	my $serverstring = '';
+
+	if (defined($luserstats->{'server'}))
+	{
+		#
+		# print logfile name if available, otherwise server name
+		#
+
+		if (defined($luserstats->{'fname'}) and $luserstats->{'fh'})
+		{
+			if ($serverrec and $server_matchdata)
+			{
+				$serverstring = ' "' . $luserstats->{'fname'} . '"';
+			}
+			else
+			{
+				#
+				# logfile is active, but server is...
+				#
+
+				if (not $server_matchdata)
+				{
+					$serverstring = ' "' . $luserstats->{'fname'} . '" (server mismatch)';
+				}
+				else
+				{
+					$serverstring = ' "' . $luserstats->{'fname'} . '" (not connected)';
+				}
+			}
+		}
+		else
+		{
+			#
+			# print the server name
+			#
+
+			if ($serverrec)
+			{
+				#
+				# there is a connected server
+				#
+
+				if (not $server_matchdata)
+				{
+					#
+					# data server doesnt match connnected server
+					#
+
+					$serverstring = ' "' . $luserstats->{'server'} . '" (server mismatch)';
+				}
+				else
+				{
+					#
+					# data server match connnected server
+					#
+
+					$serverstring = ' "' . $luserstats->{'server'} . '"';
+				}
+			}
+			else
+			{
+				#
+				# no connected server
+				#
+
+				if (not $server_matchdata)
+				{
+					#
+					# data server doesnt match connnected server
+					#
+
+					$serverstring = ' "' . $luserstats->{'server'} . '" (server mismatch)';
+				}
+				else
+				{
+					$serverstring = ' "' . $luserstats->{'server'} . '" (not connected)';
+				}
+			}
+		}
+
+		#
+		# print time of last data reply
+		#
+
+		if ($luserstats->{'time'})
+		{
+			#
+			# add the timestamp
+			#
+
+			my $time_diff_str = '';
+
+			if ((my $time_diff = (time() - $luserstats->{'time'})) > 60)
+			{
+				#
+				# turn seconds since data was collected into readable format
+				#
+
+				my $value      = 0;
+				$time_diff_str = ' [';
+
+				if ($time_diff >= 3600)
+				{
+					#
+					# hours
+					#
+
+					$value          = int($time_diff / 3600);
+					$time_diff      = $time_diff - ($value * 3600);
+					$time_diff_str .= $value . 'h';
+				}
+
+				if (($time_diff >= 60) or ($value))
+				{
+					#
+					# minutes
+					#
+
+					$value          = int($time_diff / 60);
+					$time_diff      = $time_diff - ($value * 60);
+					$time_diff_str .= $value . 'm';
+				}
+
+				if (($time_diff) or ($value))
+				{
+					#
+					# seconds
+					#
+
+					$time_diff_str .= $time_diff . 's';
+				}
+
+				$time_diff_str .= ' ago]';
+			}
+
+			#
+			# print timestamp and possibly time difference if needed
+			#
+
+			my @now_struct = localtime($luserstats->{'time'});
+			my $data_ts    = sprintf('%02d/%02d %02d:%02d:%02d:', (1+$now_struct[4]), $now_struct[3], $now_struct[2], $now_struct[1], $now_struct[0]);
+			#                         <MM>/<DD> <hh>:<mm>:<ss>:        month            day of month    hour            minute          seconds
+			Irssi::print('  ' . $data_ts . $time_diff_str . $serverstring, Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+		else
+		{
+			#
+			# no timestamp
+			#
+
+			Irssi::print(' ' . $serverstring, Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+
+		#
+		# print data values
+		#
+
+		my $maxlen = length($luserstats->{'global'}->{'mmx'});
+		# assume network alltime max is the largest number. used for alignment
+
+		if ($luserstats->{'local'}->{'max'} ==  $luserstats->{'local'}->{'mmx'})
+		{
+			Irssi::print('  local  ' . sprintf('%' . $maxlen . 'd %' . $maxlen . 'd', $luserstats->{'local'}->{'now'},  $luserstats->{'local'}->{'max'}),  Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+		else
+		{
+			Irssi::print('  local  ' . sprintf('%' . $maxlen . 'd %' . $maxlen . 'd %' . $maxlen . 'd', $luserstats->{'local'}->{'now'},  $luserstats->{'local'}->{'max'},  $luserstats->{'local'}->{'mmx'}),  Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+
+		if ($luserstats->{'global'}->{'max'} ==  $luserstats->{'global'}->{'mmx'})
+		{
+			Irssi::print('  global ' . sprintf('%' . $maxlen . 'd %' . $maxlen . 'd', $luserstats->{'global'}->{'now'}, $luserstats->{'global'}->{'max'}), Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+		else
+		{
+			Irssi::print('  global ' . sprintf('%' . $maxlen . 'd %' . $maxlen . 'd %' . $maxlen . 'd', $luserstats->{'global'}->{'now'}, $luserstats->{'global'}->{'max'}, $luserstats->{'global'}->{'mmx'}), Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
 	}
 	else
 	{
-		$timeout = $timeout - $now_struct[0];
+		#
+		# no recent data yet
+		#
+
+		Irssi::print('  <no data>', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
 	}
 
-	#                    in msec
-	Irssi::timeout_add_once(1000 * $timeout, 'timeout_luserstats', undef);
+	#
+	# print server setting if needed
+	#
+
+	if (not $server_matchdata)
+	{
+		Irssi::print(' server', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+		if ($serversetting ne '')
+		{
+			if (not $serverrec)
+			{
+				Irssi::print('  "' . $serversetting . '" (not connected)', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+			}
+			else
+			{
+				Irssi::print('  "' . $serversetting . '" (connected)', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+			}
+		}
+		else
+		{
+			Irssi::print('  <none set>', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+	}
+
+	#
+	# print connected servers if needed
+	#
+
+	if (not $serverrec)
+	{
+		Irssi::print(' connections', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+		if(@servers)
+		{
+			for my $server (@servers)
+			{
+				Irssi::print('  "' . $server . '"', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+
+				next;
+			}
+		}
+		else
+		{
+			Irssi::print('  <none>', Irssi::MSGLEVEL_CRAP | Irssi::MSGLEVEL_NOHILIGHT | Irssi::MSGLEVEL_NO_ACT);
+		}
+	}
+
+	return(1);
+}
+
+##############################################################################
+#
+# Irssi signal handlers
+#
+##############################################################################
+
+sub signal_redir_event_numeric
+{
+	#
+	# numeric signal handler for 'USERS' redirected command replies. collects
+	# data, and when all data is collected sends it for processing
+	#
+	# always returns true
+	#
+	my ($serverrec, $data, $nickname, $userhost) = @_;
+
+	if (not $nickname)
+	{
+		#
+		# the server address is in $nickname for numeric events. if it isnt,
+		# bail out. this really shouldnt happen though
+		#
+
+		lastlog('error! numeric event reply without server nickname');
+
+		return(1);
+	}
+
+	#
+	# is this reply from the expected server?
+	#
+
+	my $servername = get_serverrec_name($serverrec);
+
+	if (lc($servername) ne lc($luserstats_data->{'server'}))
+	{
+		lastlog('error! numeric event reply from wrong server');
+
+		return(1);
+	}
+
+	if (lc($nickname) ne lc($serverrec->{'real_address'}))
+	{
+		lastlog('error! numeric event reply from wrong server address');
+
+		return(1);
+	}
+
+	#
+	# numeric replies 265 and 266 are very similiar, so we use a little magic to catch both
+	#
+
+	if ($data =~ m/^\S+\s+(\d+)\s+(\d+)\s+:Current (local|global)/)
+	{
+		my $type                           = lc($3);  # $3 is either 'local' for 265 or 'global' for 266
+		$luserstats_data->{$type}->{'now'} = int($1); # current user count
+		$luserstats_data->{$type}->{'max'} = int($2); # highest user count seen
+
+		if ($type eq 'global')
+		{
+			#
+			# 'global' numeric 266 is our last expected event, so process collected data
+			#
+
+			luserstats();
+		}
+	}
+	else
+	{
+		lastlog('error! numeric event reply data did not match');
+	}
 
 	return(1);
 }
@@ -481,219 +1211,45 @@ sub timeout_luserstats
 	# always returns true
 	#
 
-	$state->{'data'} =
+	luserstats_reset_data();
+
+	my $serverrec = luserstats_serverrec();
+
+	if (defined($serverrec))
 	{
-		'time'        => time(), # timestamp of current data
-		'networkname' => undef,  # networkname from Irssi, based on setting
-		'servername'  => undef,  # servername from Irssi, based on setting
-		'users'       =>         # usercounts from server, default to -1
-		{
-			'local'   =>
-			{
-				'current' => -1,
-				'max'     => -1,
-			},
-			'global'  =>
-			{
-				'current' => -1,
-				'max'     => -1,
-			},
-		},
-	};
+		$luserstats_data->{'server'} = get_serverrec_name($serverrec);
 
-	my $data = $state->{'data'};
-
-	#
-	# find a serverrec matching our setting
-	#
-
-	my ($networkname, $servername, undef) =
-		# '<networkname>/<server>'
-		# any additional '/' and text following it will be dropped
-		split('/', Irssi::settings_get_str($IRSSI{'name'} . '_server'), 3
-	);
-
-	my $serverrec = undef;
-
-	for (Irssi::servers())
-	{
-		$serverrec = $_; # 'for $var (...)' would localize $var
-
-		if (ref($serverrec) eq 'Irssi::Irc::Server') # only want irc servers
-		{
-			my $chatnet = $serverrec->{'chatnet'};
-
-			if ($chatnet eq '') # server has no networkname, use tag instead
-			{
-				$chatnet = $serverrec->{'tag'};
+		$serverrec->redirect_event($lc_irssi_name . ' USERS',
+			1,  # stop events count
+			'', # comparison argument
+			-1, # remote (-1: use default)
+			'', # failure signal
+			{   # signals
+				'event 265' => 'redir ' . $lc_irssi_name . ' event numeric', # RPL_LOCALUSERS
+				'event 266' => 'redir ' . $lc_irssi_name . ' event numeric', # RPL_GLOBALUSERS
+				''          => 'event empty',                                # ignore everything else
 			}
-
-			if (($serverrec->{'connected'}) and
-			    (lc($chatnet) eq lc($networkname)) and
-			    (lc($serverrec->{'real_address'}) eq lc($servername)))
-			{
-				# we got a match, update state data and move on
-				$data->{'networkname'} = $chatnet;
-				$data->{'servername'}  = $serverrec->{'real_address'};
-				last;
-			}
-		}
-
-		# not a match
-		$serverrec = undef;
-	}
-
-	if (not defined($serverrec)) # no matching server found this time
-	{
-		if (defined($state->{'log'}->{'fh'}))
-		{
-			close $state->{'log'}->{'fh'}; # this can fail, but *shrugs*
-			$state->{'log'}->{'fh'} = undef;
-			lastlog('closed file "' . $state->{'log'}->{'fname'}
-				. '" [no match]'
-			);
-		}
-		lastlog('no available server matching "'
-			. Irssi::settings_get_str($IRSSI{'name'} . '_server') . '"'
 		);
-		$state->{'data'} = {};
-		next_timeout_luserstats();
-		return(1);
+
+		$serverrec->send_raw_now('USERS');
 	}
-
-	#
-	# request luserstats
-	#
-
-	$serverrec->redirect_event($IRSSI{'name'} . ' USERS',
-		1,  # stop events count
-		'', # comparison argument
-		-1, # remote (-1: use default)
-		'', # failure signal
-		{   # signals
-			'event 265' => 'redir ' . $IRSSI{'name'} # RPL_LOCALUSERS
-				. ' event numeric',
-			'event 266' => 'redir ' . $IRSSI{'name'} # RPL_GLOBALUSERS
-				. ' event numeric',
-			''          => 'event empty',            # ignore everything else
-		}
-	);
-
-	$serverrec->send_raw_now('USERS');
-	next_timeout_luserstats();
-
-	return(1);
-}
-
-##############################################################################
-#
-# Irssi signal handlers
-#
-##############################################################################
-
-sub signal_redir_event_numeric
-{
-	#
-	# numeric 265 and 266 signal handler for 'USERS' redirected commands
-	#
-	# always returns true
-	#
-	my ($serverrec, $data, $nickname, $userhost) = @_;
-
-	#
-	# $nickname contains the servername and $userhost is empty (for numeric
-	# events)
-	#
-
-	if (not defined($nickname))
+	else
 	{
-		# should never happen. lets play it safe, we need it set to something
-		$nickname = '<unknown>';
-	}
-
-	if (lc($nickname) ne lc($state->{'data'}->{'servername'}))
-	{
-		# should never happen. but we dont want the wrong data if it does
 		#
-		# (and i dont like not checking the networkname against $serverrec,
-		# but the chances of that not matching are (i think) very slim. we
-		# should after all never get a numeric redir event for something we
-		# never requested. and we do not currently request from more than one
-		# server)
-		return(1);
-	}
+		# no server found
+		#
 
-	#
-	# numeric replies 265 and 266 are very similiar, so we use a little magic
-	# to catch either
-	#
-
-	if ($data =~ m/^\S+\s+(\d+)\s+(\d+)\s+:Current (local|global)/)
-	{
-		# $3 is either 'local'/265 or 'global'/266
-		my $numeric_type = lc($3);
-		$state->{'data'}->{'users'}->{$numeric_type}->{'current'} = int($1);
-		$state->{'data'}->{'users'}->{$numeric_type}->{'max'}     = int($2);
-
-		if ($numeric_type eq 'global') # 'global' is our last expected event
+		if ($luserstats->{'fh'})
 		{
-			# process collected data
-			luserstats();
-			$state->{'data'} = {};
+			luserstats_file_close();
+			lastlog('log closed "' . $luserstats->{'fname'} . '": connection lost');
 		}
 	}
 
-	return(1);
-}
-
-##############################################################################
-#
-# Irssi command handlers
-#
-##############################################################################
-
-sub command_luserstats
-{
-	#
-	# print version and other useful information
-	#
-	# always returns true
-	#
-	my ($data, $server, $witem) = @_;
-
-	irssi_print('mh_luserstats.pl v' . $VERSION
-		. ' (' . $IRSSI{'changed'} . ') Copyright (c) 2018  Michael Hansen'
-	);
-
-	irssi_print(' available servers: ' . irssi_servers_qstr());
-
-	my $lastlog_line = 0;
-
-	for my $line (@{$state->{'lastlog'}->{'log'}})
-	{
-		if ($lastlog_line == 0)
-		{
-			irssi_print(' lastlog          :');
-		}
-
-		$lastlog_line++;
-
-		irssi_print('  ' . $line);
-	}
-
-	if (($lastlog_line > 0) and ($state->{'lastlog'}->{'oldcnt'}))
-	{
-		irssi_print(' last message repeated '
-			. $state->{'lastlog'}->{'oldcnt'}  . ' times'
-		);
-	}
-
-	irssi_print('type "/SET ' . $IRSSI{'name'} . '" to see all settings');
-
+	luserstats_next_timeout();
 
 	return(1);
 }
-
 
 ##############################################################################
 #
@@ -702,22 +1258,17 @@ sub command_luserstats
 ##############################################################################
 
 #
-# register Irssi settings
+# add irssi settings
 #
 
-Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_datadir',
-	Irssi::get_irssi_dir() . '/' . $IRSSI{'name'}
-);
-Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'} . '_server',
-	'<network>/<server>'
-);
+Irssi::settings_add_str($IRSSI{'name'}, $lc_irssi_name, '');
 
 #
 # register Irssi command redirections
 #
 
-Irssi::Irc::Server::redirect_register($IRSSI{'name'} . ' USERS',
-	0, # remote
+Irssi::Irc::Server::redirect_register($lc_irssi_name . ' USERS',
+	0, # is command remote
 	0, # remote timeout
 	{  # start events
 		'event 265' => 1, # RPL_LOCALUSERS
@@ -733,26 +1284,29 @@ Irssi::Irc::Server::redirect_register($IRSSI{'name'} . ' USERS',
 # register Irssi signals
 #
 
-Irssi::signal_add('redir ' . $IRSSI{'name'} . ' event numeric',
-	'signal_redir_event_numeric'
-);
+Irssi::signal_add('redir ' . $lc_irssi_name . ' event numeric', 'signal_redir_event_numeric');
 
 #
 # register Irssi commands
 #
 
-Irssi::command_bind(lc($IRSSI{'name'}), 'command_luserstats',
-	$IRSSI{'name'}
-);
+Irssi::command_bind($lc_irssi_name, 'command_luserstats', $IRSSI{'name'});
 
 #
-# inital timeout, this sets everything in motion
+# initialise lastlog and luserstats
 #
 
-Irssi::timeout_add_once(100, 'next_timeout_luserstats', undef);
+lastlog_reset();
+luserstats_reset();
 
 #
-# and put an entry in the lastlog, for good measure
+# start first luserstats timeout
+#
+
+Irssi::timeout_add_once(100, 'luserstats_next_timeout', undef);
+
+#
+# done
 #
 
 lastlog('script loaded');
