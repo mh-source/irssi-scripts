@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-11-29T12:41:04Z)
-# mh_freekicknore v0.01
+# mh_freekicknore.pl (2018-12-02T21:35:53Z)
+# mh_freekicknore v0.02
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -24,7 +24,7 @@
 #
 #   this is an early alpha release so quickstart is all you get for now
 #
-#   the regular expression is currently hardcoded (so are most other values) to
+#   the regular expression is currently hardcoded (so are some other values) to
 #   deal with a specific ongoing spam-campaign
 #
 #   to enable the script you need to set the 'mh_freekicknore' setting to match
@@ -39,9 +39,12 @@
 #     disable on all channels and servertags:
 #       /set -clear mh_freekicknore
 #
+#   (see the 'settings' section for more details on configuring the script)
+#
 #   when the script is enabled it will look for users whose first message to
 #   the channel matches a regular expression. if found, the user is ignored for
-#   a short period and if possible, kicked out
+#   a short period and if possible, kicked out (it will not try to match users
+#   with channel or server privileges (ops, voice, opers))
 #
 # settings:
 #
@@ -49,7 +52,82 @@
 #     a space-separated list of '<servertag>['/'<channel>[','<channel2>...]]'
 #     entries for channels to monitor. accepts '*' as a wildcard
 #
+#   mh_freekicknore_log  (bool, default: OFF)
+#     enable/disable logging to a file in .irssi/mh_freekicknore/
+#
+#   mh_freekicknore_match_ignore  (bool, default: ON)
+#     enable/disable ignoring the client after a match is made
+#
+#   mh_freekicknore_match_ignore_time  (int, default: 40)
+#     seconds to ignore the client after a match is made. a message about the
+#     ignore will be printed, you can disable this using a negative value (ie.
+#     -40 for silent ignore for 40 seconds). this is only in effect if the
+#     mh_freekicknore_match_ignore setting is ON
+#
+#   mh_freekicknore_match_kick  (bool, default: ON)
+#     enable/disable kicking the client after a match is made (if you are op)
+#
+# todo:
+#
+#   * features
+#     - allow matching ops/voice/halfop/oper
+#     - ban/!kick/etc options in regex match
+#
+#   * theme formats
+#     - prettyfi, msglevels
+#     - documentation
+#
+#   * log
+#     - what needs logging and which details?
+#     - log all ignored text?
+#     - log file rollover at midnight
+#
+#   * cache
+#     - setting for how long to wait before a client is forgotten. hardcoded to
+#       60s (and not really adhered to) right now
+#     - actually follow that setting and remove them if trying to get one
+#     - cache matches temporarilly and check joins against them
+#     - kick on all channels the client is on when matched somewhere
+#
+#   * regex
+#     - in an array for priority in match loop
+#     - per regex options
+#     - configurable and stored persistently
+#
+#   * flood protection
+#
+#   * config
+#     - persistent storage of per channel configuration
+#
+#   * settings
+#     - global settings are currently just pushed down to all channels. should
+#       be per channel options (and per regex) probably via /mh_freekicknore
+#
+#   * command /mh_freekicknore
+#     - config, tags/channels matching config
+#     - cache
+#     - lastlog of "important" events
+#     - documentation
+#
+#   * command /HELP
+#     - just a stub till it makes sense to put effort into writing it
+#     - documentation
+#
+#   * source code comments
+#
 # history:
+#
+#   v0.02 (2018-12-02T21:35:53Z)
+#     * added logging to a file and setting mh_freekicknore_log
+#     * new setting mh_freekicknore_match_ignore
+#     * new setting mh_freekicknore_match_ignore_time
+#     * new setting mh_freekicknore_match_kick
+#     * added theme format mh_freekicknore_match_ignore
+#     * optional message when ignoring a client (via _ignore_time sign)
+#     * added /help command stub
+#     * added /mh_freekicknore command stub
+#     * fixed minor (warning) issue with some 'constants' subs without ()
+#     * added a todo/roadmap
 #
 #   v0.01 (2018-11-29T12:41:04Z)
 #     first alpha release
@@ -60,22 +138,28 @@ use strict;
 use warnings;
 use utf8;
 
+use File::Path ();
+use IO::Handle ();
+use Time::Local ();
+
 ###############################################################################
 #
 # irssi header
 #
 ###############################################################################
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
 	'description' => 'kick and/or ignore users if first public message matches regex',
-	'license'     => 'ISC',
+	'commands'    => 'mh_freekicknore',
+    'modules'     => 'File::Path IO::Handle Time::Local',
+	'url'         => 'https://github.com/mh-source/irssi-scripts/',
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
-	'url'         => 'https://github.com/mh-source/irssi-scripts/',
-	'changed'     => '2018-11-29T12:41:04Z',
+	'license'     => 'ISC',
+	'changed'     => '2018-12-02T21:35:53Z',
 );
 
 ###############################################################################
@@ -91,7 +175,29 @@ our $REGEX =
 };
 
 our $config = undef;
+our $log    = undef;
 our $cache  = undef;
+
+###############################################################################
+#
+# common string functions
+#
+###############################################################################
+
+sub string_trim_space
+{
+	my ($string) = @_;
+
+	if (not length($string))
+	{
+		return('');
+	}
+
+	$string =~ s/^\s+//g; # remove prefixed spaces, etc
+	$string =~ s/\s+$//g; # remove suffixed spaces, etc
+
+	return($string);
+}
 
 ###############################################################################
 #
@@ -101,19 +207,40 @@ our $cache  = undef;
 
 sub config_init
 {
-	my $config_string = Irssi::settings_get_str($IRSSI{'name'});
+	my $config_string            = Irssi::settings_get_str( $IRSSI{'name'});
+	my $config_match_ignore      = Irssi::settings_get_bool($IRSSI{'name'} . '_match_ignore');
+	my $config_match_ignore_time = Irssi::settings_get_int( $IRSSI{'name'} . '_match_ignore_time');
+	my $config_match_kick        = Irssi::settings_get_bool($IRSSI{'name'} . '_match_kick');
 
 	if (defined($config))
 	{
-		if ($config_string eq $config->{'string'})
+		if ($config_string ne $config->{'string'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_ignore != $config->{'match_ignore'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_ignore_time != $config->{'match_ignore_time'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_kick != $config->{'match_kick'})
+		{
+			$config = undef;
+		}
+
+		if (defined($config))
 		{
 			return(0);
 		}
-
-		$config = undef;
 	}
 
-	$config->{'string'} = $config_string;
+	$config->{'string'}            = $config_string;
+	$config->{'match_ignore'}      = $config_match_ignore;
+	$config->{'match_ignore_time'} = $config_match_ignore_time;
+	$config->{'match_kick'}        = $config_match_kick;
 
 	for my $config_lc (split(' ', lc($config_string)))
 	{
@@ -126,7 +253,13 @@ sub config_init
 
 		for my $channelname_lc (split(',', $channelnames_lc))
 		{
-			$config->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc} = { };
+			$config->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc} =
+			{
+				'enabled'           => 1,
+				'match_ignore'      => $config->{'match_ignore'},
+				'match_ignore_time' => $config->{'match_ignore_time'},
+				'match_kick'        => $config->{'match_kick'},
+			};
 		}
 	}
 
@@ -154,6 +287,73 @@ sub config_get_channel
 	}
 
 	return(undef);
+}
+
+sub log_init
+{
+	if (Irssi::settings_get_bool($IRSSI{'name'} . '_log'))
+	{
+		if (not defined($log))
+		{
+			my $filepath = Irssi::get_irssi_dir() . '/' . $IRSSI{'name'} . '/';
+			my $filename = $filepath . 'log.txt';
+
+			File::Path::make_path $filepath;
+
+			if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
+			{
+				close($log->{'fh'});
+
+				return(1);
+			}
+
+			$log->{'fh'}->autoflush(1);
+		}
+
+		log_write('log openend');
+	}
+	else
+	{
+		if (defined($log))
+		{
+			log_write('log closed');
+			close($log->{'fh'});
+			$log = undef;
+		}
+	}
+
+	return(1);
+}
+
+sub log_write
+{
+	my ($string) = @_;
+
+	if (not defined($log))
+	{
+		return(0);
+	}
+
+	if (not defined($log->{'fh'}))
+	{
+		return(0);
+	}
+
+	my @time_struct = localtime();
+	my $string_ts   = sprintf
+	(
+		'%04d-%02d-%02dT%02d:%02d:%02d',
+			(1900+$time_struct[5]),
+			(1+$time_struct[4]),
+			$time_struct[3],
+			$time_struct[2],
+			$time_struct[1],
+			$time_struct[0]
+	);
+
+	print({$log->{'fh'}} $string_ts . ': ' . $string . "\n");
+
+	return(1);
 }
 
 sub cache_init
@@ -229,11 +429,20 @@ sub cache_add_channel
 
 	if (defined($channel))
 	{
-		$channel = { 'enabled' => 1 };
+		$channel =
+		{
+			'enabled'           => $channel->{'enabled'},
+			'match_ignore'      => $channel->{'match_ignore'},
+			'match_ignore_time' => $channel->{'match_ignore_time'},
+			'match_kick'        => $channel->{'match_kick'},
+		};
 	}
 	else
 	{
-		$channel = { 'enabled' => 0 };
+		$channel =
+		{
+			'enabled' => 0
+		};
 	}
 
 	$channel->{'server'} = $servertag_lc;
@@ -303,38 +512,69 @@ sub regex_matched
 {
 	my ($channelrec, $channel, $client, $regex, $message) = @_;
 
-	if ($channelrec->{'chanop'})
+	log_write('match ' . $channel->{'server'} . '/' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex . ']: "' . $message . '"');
+
+	if ($channel->{'match_kick'})
 	{
-		$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex);
+		if ($channelrec->{'chanop'})
+		{
+			$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex);
+		}
 	}
 
-	if ($channelrec->{'server'}->ignore_check($client->{'nick'}, $client->{'host'}, $channel->{'name'}, $message, Irssi::level2bits('PUBLIC')))
+	if ($channel->{'match_ignore'})
 	{
-		return(1);
+		if ($channelrec->{'server'}->ignore_check($client->{'nick'}, $client->{'host'}, $channel->{'name'}, $message, Irssi::level2bits('PUBLIC')))
+		{
+			return(1);
+		}
+
+		my $config_match_ignore_time_abs = abs($channel->{'match_ignore_time'});
+
+		if ($config_match_ignore_time_abs)
+		{
+			my $clientname = $client->{'nick'} . '!' . $client->{'host'};
+
+			$channelrec->command('^IGNORE -time ' . (2 + $config_match_ignore_time_abs) . ' ' . $clientname . ' PUBLIC');
+			Irssi::timeout_add_once((1000 * $config_match_ignore_time_abs), sub
+			{
+				$channelrec->command('^UNIGNORE ' . $clientname);
+
+				return(1);
+
+			}, undef);
+
+			if ($config_match_ignore_time_abs == $channel->{'match_ignore_time'})
+			{
+				$channelrec->printformat(Irssi::MSGLEVEL_CRAP() | Irssi::MSGLEVEL_NOHILIGHT(), $IRSSI{'name'} . '_match_ignore', $client->{'nick'}, $client->{'host'}, $regex, $config_match_ignore_time_abs . 's');
+			}
+		}
 	}
-
-	my $clientname = $client->{'nick'} . '!' . $client->{'host'};
-
-	$channelrec->command('^IGNORE -time 42 ' . $clientname . ' PUBLIC');
-	Irssi::timeout_add_once(40000, sub
-	{
-			$channelrec->command('^UNIGNORE ' . $clientname);
-
-		return(1);
-	}, undef);
 
 	return(1);
 }
 
 sub onload
 {
-	Irssi::settings_add_str($IRSSI{'name'}, $IRSSI{'name'}, '');
+	Irssi::theme_register
+	([
+		$IRSSI{'name'} . '_match_ignore', $IRSSI{'name'} . ': ignore {channick_hilight $0}!{chanhost_hilight $1} {reason $2} ($3)', # nick, host, reason, timeout
+	]);
+
+	Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'}                  ,      '');
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_log',               0);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore',      1);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore_time', 40);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',        1);
+
+	Irssi::command_bind('help',             'command_help');
+	Irssi::command_bind(lc($IRSSI{'name'}), 'command_mh_freekicknore', $IRSSI{'name'});
 
 	signal_setup_changed();
 
-	Irssi::signal_add('setup changed', 'signal_setup_changed');
-	Irssi::signal_add_priority('message join',   'signal_message_join_hm100',   Irssi::SIGNAL_PRIORITY_HIGH - 100);
-	Irssi::signal_add_priority('message public', 'signal_message_public_hm100', Irssi::SIGNAL_PRIORITY_HIGH - 100);
+	Irssi::signal_add(         'setup changed',  'signal_setup_changed');
+	Irssi::signal_add_priority('message join',   'signal_message_join_hm100',   Irssi::SIGNAL_PRIORITY_HIGH() - 100);
+	Irssi::signal_add_priority('message public', 'signal_message_public_hm100', Irssi::SIGNAL_PRIORITY_HIGH() - 100);
 
 	return(1);
 }
@@ -347,6 +587,8 @@ sub onload
 
 sub signal_setup_changed
 {
+	log_init();
+
 	if (config_init())
 	{
 		cache_init();
@@ -474,6 +716,45 @@ sub timeout_cache_prune
 	cache_prune();
 
 	$cache->{'tout'} = Irssi::timeout_add_once(60000, 'timeout_cache_prune', undef);
+
+	return(1);
+}
+
+###############################################################################
+#
+# irssi command handlers
+#
+###############################################################################
+
+sub command_help
+{
+	my ($data, $server, $witem) = @_;
+
+	if (not defined($data))
+	{
+		return(1);
+	}
+
+	my ($data_lc, $data_more) = split(/\s/, $data, 2);
+	$data_lc = lc(string_trim_space($data_lc));
+
+	if ($data_lc ne lc($IRSSI{'name'}))
+	{
+		return(1);
+	}
+
+	Irssi::signal_stop();
+	Irssi::print('Help for ' . $IRSSI{'name'} . ' not available. Read the script file.' . "\n");
+
+	return(1);
+}
+
+sub command_mh_freekicknore
+{
+	my ($data, $server, $witem) = @_;
+
+	Irssi::print('mh_freekicknore v0.02 Copyright (c) 2018  Michael Hansen');
+	Irssi::print(' Sorry, I am just a stub.');
 
 	return(1);
 }
