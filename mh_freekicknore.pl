@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-04T23:40:00Z)
-# mh_freekicknore v0.04
+# mh_freekicknore.pl (2018-12-05T05:50:48Z)
+# mh_freekicknore v0.05
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -46,6 +46,9 @@
 #     /SET -CLEAR mh_freekicknore
 #       disable on all channels and servertags
 #
+#   to view most recent script events, including matched clients, use the
+#   command /mh_freekicknore to see the lastlog
+#
 # settings:
 #
 #   mh_freekicknore  (string, default: '')
@@ -83,8 +86,10 @@
 #
 #   * log
 #     - log file rollover at midnight
-#     - lastlog via /mh_freekicknore
-#     - what needs logging and which details?
+#     - lastlog size should be a setting
+#     - lastlog prune could be done on timeout and before printing, theres no
+#       need to remove (the preditable) 1 line on each log_last() call
+#     - re-use log_last() timestamp in log_write()
 #     - log all ignored text?
 #     - log setting and fh reality can get out of sync on errors
 #     - documentation (in log section and in /HELP)
@@ -114,7 +119,6 @@
 #     - not much validation is done on setting values, so be careful
 #
 #   * command /mh_freekicknore
-#     - lastlog of "important" events
 #     - config, current tags/channels matching config, and cache
 #     - documentation (in 'commands' section and /HELP)
 #
@@ -125,6 +129,13 @@
 #   * source code comments
 #
 # history:
+#
+#   v0.05 (2018-12-05T05:50:48Z)
+#     * updated command /mh_freekicknore stub to show lastlog
+#     * added lastlog, a log of the last (currently hardcoded to 50) script
+#       events
+#     * fixed config_init() prune_delay setting compared against wrong value
+#       causing excessive re-inits
 #
 #   v0.04 (2018-12-04T23:40:00Z)
 #     * documentation cleaned up a bit
@@ -174,7 +185,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -185,7 +196,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-04T23:40:00Z',
+	'changed'     => '2018-12-05T05:50:48Z',
 );
 
 ###############################################################################
@@ -194,7 +205,11 @@ our %IRSSI   =
 #
 ###############################################################################
 
-our $log    = undef;
+our $log    =
+{
+	'fh'   => undef, # log-file handle when log enabled and file open
+	'last' => undef, # array of lastlog messages
+};
 our $config = undef;
 our $cache  = undef;
 our @REGEX  =
@@ -263,7 +278,7 @@ sub config_init
 		{
 			$config = undef;
 		}
-		elsif ($config_prune_delay != $config->{'match_kick'})
+		elsif ($config_prune_delay != $config->{'prune_delay'})
 		{
 			$config = undef;
 		}
@@ -367,7 +382,7 @@ sub log_open
 	# enable automatic flush after each write to the filehandle
 	$log->{'fh'}->autoflush(1);
 
-	log_write('log opened');
+	log_last('log opened');
 
 	return(1);
 }
@@ -376,7 +391,7 @@ sub log_close
 {
 	if (defined($log->{'fh'}))
 	{
-		log_write('log closed');
+		log_last('log closed');
 		close($log->{'fh'});
 		$log->{'fh'} = undef;
 	}
@@ -406,6 +421,38 @@ sub log_write
 	print({$log->{'fh'}} $string_ts . $string . "\n");
 
 	return(1);
+}
+
+sub log_last
+{
+	my ($string) = @_;
+
+	log_write($string);
+
+	my @time_struct = localtime();
+	my $string_ts   = sprintf('%02d/%02d %02d:%02d:%02d: ',
+		(1+$time_struct[4]),    # month
+		$time_struct[3],        # day of month
+		$time_struct[2],        # hour
+		$time_struct[1],        # minute
+		$time_struct[0]         # second
+	);
+
+	push(@{$log->{'last'}}, $string_ts . $string);
+
+	log_last_prune();
+
+	return(1);
+}
+
+sub log_last_prune
+{
+	while (@{$log->{'last'}} > 50)
+	{
+		shift(@{$log->{'last'}});
+
+		next;
+	}
 }
 
 sub cache_init
@@ -569,7 +616,7 @@ sub regex_matched
 {
 	my ($channelrec, $channel, $client, $regex, $message) = @_;
 
-	log_write('match ' . $channel->{'server'} . '/' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex->{'reason'} . ']: "' . $message . '"');
+	log_last('match ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex->{'reason'} . '] ' . $channel->{'server'} . '/' . $channel->{'name'} . ': "' . $message . '"');
 
 	if ($channel->{'match_kick'})
 	{
@@ -626,14 +673,16 @@ sub onload
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',        1);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_prune_delay',       60);
 
-	Irssi::command_bind('help',             'command_help');
-	Irssi::command_bind(lc($IRSSI{'name'}), 'command_mh_freekicknore', $IRSSI{'name'});
-
 	signal_setup_changed();
 
 	Irssi::signal_add(         'setup changed',  'signal_setup_changed');
 	Irssi::signal_add_priority('message join',   'signal_message_join_hm100',   Irssi::SIGNAL_PRIORITY_HIGH() - 100);
 	Irssi::signal_add_priority('message public', 'signal_message_public_hm100', Irssi::SIGNAL_PRIORITY_HIGH() - 100);
+
+	Irssi::command_bind('help',             'command_help');
+	Irssi::command_bind(lc($IRSSI{'name'}), 'command_mh_freekicknore', $IRSSI{'name'});
+
+	log_last('script loaded');
 
 	return(1);
 }
@@ -808,8 +857,29 @@ sub command_mh_freekicknore
 {
 	my ($data, $server, $witem) = @_;
 
-	Irssi::print('mh_freekicknore v0.04 Copyright (c) 2018  Michael Hansen');
-	Irssi::print(' Sorry, I am just a stub.');
+	Irssi::print('mh_freekicknore v0.05 Copyright (c) 2018  Michael Hansen');
+
+	# print lastlog messages
+	#
+	# wrap in check for if (defined($log->{'last'})) if this can be called with
+	# $log->{'last'} undefined, otherwise we get the warning: 'Can't use an
+	# undefined value as an ARRAY reference'. there should always be at least
+	# 'script loaded' in our lastlog, so we do not check
+	if (@{$log->{'last'}})
+	{
+		Irssi::print(' lastlog:');
+
+		for my $string (@{$log->{'last'}})
+		{
+			Irssi::print('  ' . $string);
+
+			next;
+		}
+	}
+	else
+	{
+		Irssi::print(' lastlog: empty');
+	}
 
 	return(1);
 }
