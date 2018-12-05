@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-03T18:34:37Z)
-# mh_freekicknore v0.03
+# mh_freekicknore.pl (2018-12-04T23:40:00Z)
+# mh_freekicknore v0.04
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -21,29 +21,30 @@
 # kick and/or ignore users if first public message matches regex
 #
 # when the script is enabled it will look for users whose first message to the
-# channel matches a regular expression. if found, the user is ignored for a
-# short period and if possible, kicked out (it will not try to match users with
-# channel or server privileges (op, voice, oper))
+# channel within a short time matches a regular expression. if found, the user
+# is ignored for a short period and if possible, kicked out (it will not try to
+# match users with channel or server privileges (op, voice, oper))
 #
-# the regular expression is currently hardcoded (so are some other values) to
-# deal with a specific ongoing spam-campaign
+# the regular expression is currently hardcoded to deal with a specific ongoing
+# spam-campaign
 #
-# you can find me on IRCnet channel #mh if you have feedback, questions, or
-# want to follow updates --mh
+# join IRCnet channel #mh for feedback, questions, or following script updates
 #
 # quickstart:
 #
-#   to enable the script you need to set the 'mh_freekicknore' setting to match
-#   the channels you want to monitor. for example (in Irssi):
+#   to enable the script set setting 'mh_freekicknore' to match servertags and
+#   channels to be monitored
 #
-#     all channels on all servertags:
-#       /set mh_freekicknore *
+#   examples (in Irssi):
 #
-#     all channels on servertag NetA and #channel1 and #channel2 on NetB:
-#       /set mh_freekicknore NetA NetB/#channel1,#channel2
+#     /SET mh_freekicknore *
+#       all channels on all servertags
 #
-#     disable on all channels and servertags:
-#       /set -clear mh_freekicknore
+#     /SET mh_freekicknore NetA NetB/#channel1,#channel2
+#       all channels on servertag NetA, and #channel1 and #channel2 on NetB
+#
+#     /SET -CLEAR mh_freekicknore
+#       disable on all channels and servertags
 #
 # settings:
 #
@@ -63,6 +64,9 @@
 #     -40 for silent ignore for 40 seconds). this is only in effect if the
 #     mh_freekicknore_match_ignore setting is ON
 #
+#   mh_freekicknore_match_join_time  (int, default: 20)
+#     seconds to wait for joined clients' first message before forgetting them
+#
 #   mh_freekicknore_match_kick  (bool, default: ON)
 #     enable/disable kicking the client after a match is made (if you are op)
 #
@@ -74,51 +78,63 @@
 #
 #   * features
 #     - allow matching ops/voice/halfop/oper
-#     - ban/!kick/etc options in regex match
+#     - ban/!kick/etc alternatives to /kick
 #     - flood protection
 #
 #   * log
+#     - log file rollover at midnight
+#     - lastlog via /mh_freekicknore
 #     - what needs logging and which details?
 #     - log all ignored text?
-#     - log file rollover at midnight
 #     - log setting and fh reality can get out of sync on errors
-#     - documentation (in log section and in /help)
+#     - documentation (in log section and in /HELP)
 #
 #   * config
 #     - persistent storage of per channel configuration
 #
 #   * cache
-#     - setting for how long to wait before a client is forgotten. hardcoded to
-#       60s (and not really adhered to) right now
-#     - actually follow that setting and remove them if trying to get one
 #     - cache matches temporarilly and check joins against them
 #     - kick on all channels the client is on when matched somewhere
 #
 #   * regex
-#     - in an array for priority in match loop
 #     - per regex options
 #     - configurable and stored persistently
 #
+#   * ignore
+#     - ignore-time of 0 should probably be allowed to ignore one-liners
+#     - reset ignore timeout if client is re-matched while ignored
+#
 #   * theme formats
 #     - prettyfi, msglevels
-#     - documentation (in 'theme formats' section and /help)
+#     - documentation (in 'theme formats' section and /HELP)
 #
 #   * settings
 #     - global settings are currently just pushed down to all channels. should
 #       be per channel/regex
+#     - not much validation is done on setting values, so be careful
 #
 #   * command /mh_freekicknore
 #     - lastlog of "important" events
 #     - config, current tags/channels matching config, and cache
-#     - documentation (in 'commands' section and /help)
+#     - documentation (in 'commands' section and /HELP)
 #
-#   * command /help
+#   * command /HELP
 #     - just a stub till it makes sense to put effort into writing it
 #     - documentation (in 'commands' section)
 #
 #   * source code comments
 #
 # history:
+#
+#   v0.04 (2018-12-04T23:40:00Z)
+#     * documentation cleaned up a bit
+#     * log structure handling cleaned up to make sure lastlog messages are
+#       preserved when it is added
+#     * clients removed per join-time and not just in cache_prune() timeout
+#     * client join-time now updated on re-join if already cached
+#     * added setting mh_freekicknore_match_join_time
+#     * regexes now stored in an array instead of hash allowing priority in
+#       match loop
 #
 #   v0.03 (2018-12-03T18:34:37Z)
 #     * added setting mh_freekicknore_prune_delay
@@ -134,7 +150,7 @@
 #     * new setting mh_freekicknore_match_kick
 #     * added theme format mh_freekicknore_match_ignore
 #     * optional message when ignoring a client (via _ignore_time sign)
-#     * added /help command stub
+#     * added /HELP command stub
 #     * added /mh_freekicknore command stub
 #     * fixed minor (warning) issue with some 'constants' subs without ()
 #     * added a todo/roadmap
@@ -158,7 +174,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -169,7 +185,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-03T18:34:37Z',
+	'changed'     => '2018-12-04T23:40:00Z',
 );
 
 ###############################################################################
@@ -181,11 +197,13 @@ our %IRSSI   =
 our $log    = undef;
 our $config = undef;
 our $cache  = undef;
-our $REGEX  =
-{
-	qr/^.?(\/|\341\234\265|\342\201\204|\342\210\225|\342\247\270|\357\274\217).+(\342\210\226|\342\247\265|\342\247\271|\357\271\250|\357\274\274|\\)$/
-	=> 'spam',
-};
+our @REGEX  =
+(
+	{
+		'regex'  => qr/^.?(\/|\341\234\265|\342\201\204|\342\210\225|\342\247\270|\357\274\217).+(\342\210\226|\342\247\265|\342\247\271|\357\271\250|\357\274\274|\\)$/,
+		'reason' => 'spam',
+	},
+);
 
 ###############################################################################
 #
@@ -219,6 +237,7 @@ sub config_init
 	my $config_string            = Irssi::settings_get_str( $IRSSI{'name'});
 	my $config_match_ignore      = Irssi::settings_get_bool($IRSSI{'name'} . '_match_ignore');
 	my $config_match_ignore_time = Irssi::settings_get_int( $IRSSI{'name'} . '_match_ignore_time');
+	my $config_match_join_time   = Irssi::settings_get_int( $IRSSI{'name'} . '_match_join_time');
 	my $config_match_kick        = Irssi::settings_get_bool($IRSSI{'name'} . '_match_kick');
 	my $config_prune_delay       = Irssi::settings_get_int( $IRSSI{'name'} . '_prune_delay');
 
@@ -233,6 +252,10 @@ sub config_init
 			$config = undef;
 		}
 		elsif ($config_match_ignore_time != $config->{'match_ignore_time'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_join_time != $config->{'match_join_time'})
 		{
 			$config = undef;
 		}
@@ -254,6 +277,7 @@ sub config_init
 	$config->{'string'}            = $config_string;
 	$config->{'match_ignore'}      = $config_match_ignore;
 	$config->{'match_ignore_time'} = $config_match_ignore_time;
+	$config->{'match_join_time'}   = $config_match_join_time;
 	$config->{'match_kick'}        = $config_match_kick;
 	$config->{'prune_delay'}       = $config_prune_delay;
 
@@ -273,6 +297,7 @@ sub config_init
 				'enabled'           => 1,
 				'match_ignore'      => $config->{'match_ignore'},
 				'match_ignore_time' => $config->{'match_ignore_time'},
+				'match_join_time'   => $config->{'match_join_time'},
 				'match_kick'        => $config->{'match_kick'},
 			};
 		}
@@ -308,7 +333,7 @@ sub log_init
 {
 	if (Irssi::settings_get_bool($IRSSI{'name'} . '_log'))
 	{
-		if (not defined($log))
+		if (not defined($log->{'fh'}))
 		{
 			log_open();
 		}
@@ -316,7 +341,7 @@ sub log_init
 		return(1);
 	}
 
-	if (defined($log))
+	if (defined($log->{'fh'}))
 	{
 		log_close();
 	}
@@ -353,9 +378,8 @@ sub log_close
 	{
 		log_write('log closed');
 		close($log->{'fh'});
+		$log->{'fh'} = undef;
 	}
-
-	$log = undef;
 
 	return(1);
 }
@@ -363,11 +387,6 @@ sub log_close
 sub log_write
 {
 	my ($string) = @_;
-
-	if (not defined($log))
-	{
-		return(0);
-	}
 
 	if (not defined($log->{'fh'}))
 	{
@@ -414,15 +433,17 @@ sub cache_prune
 	{
 		for my $channelname (keys(%{$cache->{'server'}->{$servertag}->{'channel'}}))
 		{
-			if ($cache->{'server'}->{$servertag}->{'channel'}->{$channelname}->{'enabled'})
-			{
-				for my $clientname (keys(%{$cache->{'server'}->{$servertag}->{'channel'}->{$channelname}->{'client'}}))
-				{
-					my $client = $cache->{'server'}->{$servertag}->{'channel'}->{$channelname}->{'client'}->{$clientname};
+			my $channel = $cache->{'server'}->{$servertag}->{'channel'}->{$channelname};
 
-					if (($now - $client->{'join'}) > 60)
+			if ($channel->{'enabled'})
+			{
+				for my $clientname (keys(%{$channel->{'client'}}))
+				{
+					my $client = $channel->{'client'}->{$clientname};
+
+					if (($now - $client->{'join'}) > $channel->{'match_join_time'})
 					{
-						cache_channel_del_client($cache->{'server'}->{$servertag}->{'channel'}->{$channelname}, $client->{'nick'}, $client->{'host'});
+						cache_channel_del_client($channel, $client->{'nick'}, $client->{'host'});
 					}
 				}
 			}
@@ -467,6 +488,7 @@ sub cache_add_channel
 			'enabled'           => $channel->{'enabled'},
 			'match_ignore'      => $channel->{'match_ignore'},
 			'match_ignore_time' => $channel->{'match_ignore_time'},
+			'match_join_time'   => $channel->{'match_join_time'},
 			'match_kick'        => $channel->{'match_kick'},
 		};
 	}
@@ -508,6 +530,8 @@ sub cache_channel_add_client
 
 	if (defined($client))
 	{
+		$client->{'join'} = time();
+
 		return($client);
 	}
 
@@ -545,13 +569,13 @@ sub regex_matched
 {
 	my ($channelrec, $channel, $client, $regex, $message) = @_;
 
-	log_write('match ' . $channel->{'server'} . '/' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex . ']: "' . $message . '"');
+	log_write('match ' . $channel->{'server'} . '/' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex->{'reason'} . ']: "' . $message . '"');
 
 	if ($channel->{'match_kick'})
 	{
 		if ($channelrec->{'chanop'})
 		{
-			$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex);
+			$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex->{'reason'});
 		}
 	}
 
@@ -598,6 +622,7 @@ sub onload
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_log',               0);
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore',      1);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore_time', 40);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_join_time',   20);
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',        1);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_prune_delay',       60);
 
@@ -721,16 +746,21 @@ sub signal_message_public_hm100
 
 	cache_channel_del_client($channel, $nickrec->{'nick'}, $nickrec->{'host'});
 
+	if ((time() - $client->{'join'}) > $channel->{'match_join_time'})
+	{
+		return(1);
+	}
+
 	if ($nickrec->{'op'} or $nickrec->{'voice'} or $nickrec->{'halfop'} or $nickrec->{'serverop'})
 	{
 		return(1);
 	}
 
-	for my $regex (keys(%{$REGEX}))
+	for my $regex (@REGEX)
 	{
-		if ($message =~ $regex)
+		if ($message =~ $regex->{'regex'})
 		{
-			regex_matched($channelrec, $channel, $client, $REGEX->{$regex}, $message);
+			regex_matched($channelrec, $channel, $client, $regex, $message);
 
 			last;
 		}
@@ -748,7 +778,6 @@ sub signal_message_public_hm100
 sub timeout_cache_prune
 {
 	cache_prune();
-
 	$cache->{'prune_tout'} = Irssi::timeout_add_once(1000 * $config->{'prune_delay'}, 'timeout_cache_prune', undef);
 
 	return(1);
@@ -779,7 +808,7 @@ sub command_mh_freekicknore
 {
 	my ($data, $server, $witem) = @_;
 
-	Irssi::print('mh_freekicknore v0.03 Copyright (c) 2018  Michael Hansen');
+	Irssi::print('mh_freekicknore v0.04 Copyright (c) 2018  Michael Hansen');
 	Irssi::print(' Sorry, I am just a stub.');
 
 	return(1);
