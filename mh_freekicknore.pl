@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-05T05:50:48Z)
-# mh_freekicknore v0.05
+# mh_freekicknore.pl (2018-12-08T00:39:38Z)
+# mh_freekicknore v0.06
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -32,6 +32,11 @@
 #
 # quickstart:
 #
+#   notice: if you are updating from v0.05 or ealier, the log filename and
+#           directory structure changed in v0.06 so the previous log.txt file
+#           in .irssi/freekicknore/ is now orphaned (it only exists if you
+#           enabled logging at some point)
+#
 #   to enable the script set setting 'mh_freekicknore' to match servertags and
 #   channels to be monitored
 #
@@ -56,7 +61,8 @@
 #     entries for channels to monitor. accepts '*' as a wildcard
 #
 #   mh_freekicknore_log  (bool, default: OFF)
-#     enable/disable logging to a file in .irssi/mh_freekicknore/
+#     enable/disable logging to a datestamped file structure YYYY/MM/DD.log
+#     under .irssi/mh_freekicknore/log/
 #
 #   mh_freekicknore_match_ignore  (bool, default: ON)
 #     enable/disable ignoring the client after a match is made
@@ -83,13 +89,25 @@
 #     - allow matching ops/voice/halfop/oper
 #     - ban/!kick/etc alternatives to /kick
 #     - flood protection
+#     - catch "nick not on channel" errors when kicking and silence them
+#       to reduce noise. esp when multiple ops run the script
+#
+#   * general
+#     - move global variable initialisation into *_init() (also @REGEX)
 #
 #   * log
-#     - log file rollover at midnight
+#     - nicer aligning log messages
+#     - day-changed notice (not just vague 'log closed/opened')
+#     - day-changed check as a separate sub()
+#     - log-file day-changed check on a timeout so it happens a little more
+#       frequent and timely (then we can use just ts_dom for both checks)
 #     - lastlog size should be a setting
 #     - lastlog prune could be done on timeout and before printing, theres no
 #       need to remove (the preditable) 1 line on each log_last() call
-#     - re-use log_last() timestamp in log_write()
+#     - re-use log_last() timestamp in log_write(), etc
+#     - lastlog with reduced info and full info in logfile - less noise in
+#       client lastlog command
+#     - log->{'last'} initialised to avoid issue mentioned in /mh_feekicknore
 #     - log all ignored text?
 #     - log setting and fh reality can get out of sync on errors
 #     - documentation (in log section and in /HELP)
@@ -100,6 +118,8 @@
 #   * cache
 #     - cache matches temporarilly and check joins against them
 #     - kick on all channels the client is on when matched somewhere
+#     - @REGEX copied into cache->... so we can have 'enabled' flag in @REGEX
+#       that isnt copied into cache->@REGEX and wont slow down loop
 #
 #   * regex
 #     - per regex options
@@ -110,7 +130,12 @@
 #     - reset ignore timeout if client is re-matched while ignored
 #
 #   * theme formats
-#     - prettyfi, msglevels
+#     - prettyfi
+#     - _match_ignore format doesnt need ! between nick and host in default
+#       theme: 23:48 -!- mh_freekicknore: ignore mt![~mt@123.20.240.182] [spam]
+#       (40s)
+#     - formats for command output (ie. decent %| indent for lastlog messages)
+#     - msglevels
 #     - documentation (in 'theme formats' section and /HELP)
 #
 #   * settings
@@ -129,6 +154,17 @@
 #   * source code comments
 #
 # history:
+#
+#   v0.06 (2018-12-08T00:39:38Z)
+#     * updated regex_matched() to log a few more events and details, also only
+#       log matched message in logfile and not lastlog
+#     * updated documentation for _log setting and change notice in quickstart
+#     * changed so log-file now stored in datestamped structure YYYY/MM/DD.log
+#       under .irssi/mh_freekicknore/log/ instead of one big log.txt, with
+#       basic automatic day-change detection (very lazy) + a couple of cosmetic
+#       code changes to log_*()
+#     * updated signal_message_join_hm100() with cosmetic code change
+#     * updated todo section as usual
 #
 #   v0.05 (2018-12-05T05:50:48Z)
 #     * updated command /mh_freekicknore stub to show lastlog
@@ -185,7 +221,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -196,7 +232,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-05T05:50:48Z',
+	'changed'     => '2018-12-08T00:39:38Z',
 );
 
 ###############################################################################
@@ -207,8 +243,11 @@ our %IRSSI   =
 
 our $log    =
 {
-	'fh'   => undef, # log-file handle when log enabled and file open
-	'last' => undef, # array of lastlog messages
+	'fh'       => undef, # log-file handle when log enabled and file open
+	'ts_year'  => 0,     # log-file timestamp year
+	'ts_month' => 0,     # log-file timestamp month
+	'ts_dom'   => 0,     # log-file timestamp day of month
+	'last'     => undef, # array of lastlog messages
 };
 our $config = undef;
 our $cache  = undef;
@@ -352,13 +391,13 @@ sub log_init
 		{
 			log_open();
 		}
-
-		return(1);
 	}
-
-	if (defined($log->{'fh'}))
+	else
 	{
-		log_close();
+		if (defined($log->{'fh'}))
+		{
+			log_close();
+		}
 	}
 
 	return(1);
@@ -366,8 +405,14 @@ sub log_init
 
 sub log_open
 {
-	my $filepath = Irssi::get_irssi_dir() . '/' . $IRSSI{'name'} . '/';
-	my $filename = $filepath . 'log.txt';
+	my @time_struct    = localtime();
+	$log->{'ts_year'}  = (1900+$time_struct[5]); # counting from 1900
+	$log->{'ts_month'} = (1+$time_struct[4]);    # 0-based: 0-11
+	$log->{'ts_dom'}   = $time_struct[3];        # day of month
+	my $filepath_ts    = sprintf('%04d/%02d', $log->{'ts_year'}, $log->{'ts_month'});
+	my $filename_ts    = sprintf('%02d', $log->{'ts_dom'});
+	my $filepath       = Irssi::get_irssi_dir() . '/' . $IRSSI{'name'} . '/log/' . $filepath_ts . '/';
+	my $filename       = $filepath . $filename_ts . '.log';
 
 	# our old pal 'mkdir -p'
 	File::Path::make_path($filepath);
@@ -389,6 +434,15 @@ sub log_open
 
 sub log_close
 {
+	# these need to be zeroed out before the call to log_write() (called in
+	# log_last() below) so it does not try to detect day-changed if we are
+	# logging a close in an already ongoing day-change
+	$log->{'ts_year'}  = 0;
+	$log->{'ts_month'} = 0;
+	$log->{'ts_dom'}   = 0; # only this variable is actually used for
+	                        # day-changed check in log_write() (all 3 are used
+	                        # when this is non-zero)
+
 	if (defined($log->{'fh'}))
 	{
 		log_last('log closed');
@@ -409,13 +463,28 @@ sub log_write
 	}
 
 	my @time_struct = localtime();
-	my $string_ts   = sprintf('%04d-%02d-%02dT%02d:%02d:%02d: ',
-		(1900+$time_struct[5]), # year
-		(1+$time_struct[4]),    # month
-		$time_struct[3],        # day of month
-		$time_struct[2],        # hour
-		$time_struct[1],        # minute
-		$time_struct[0]         # second
+	my $ts_year     = (1900+$time_struct[5]); # counting from 1900
+	my $ts_month    = (1+$time_struct[4]);    # 0-based: 0-11
+	my $ts_dom      = $time_struct[3];        # day of month
+
+	# log-file day-changed check unless were already in an ongoing day-changed
+	# and just want to log it (see log_close() for details)
+	if ($log->{'ts_dom'} != 0)
+	{
+		if (($ts_dom != $log->{'ts_dom'}) or ($ts_month != $log->{'ts_month'}) or ($ts_year != $log->{'ts_year'}))
+		{
+			log_close();
+			log_open();
+		}
+	}
+
+	my $string_ts = sprintf('%04d-%02d-%02dT%02d:%02d:%02d: ',
+		$ts_year,
+		$ts_month,
+		$ts_dom,
+		$time_struct[2], # hour
+		$time_struct[1], # minute
+		$time_struct[0]  # second
 	);
 
 	print({$log->{'fh'}} $string_ts . $string . "\n");
@@ -431,11 +500,11 @@ sub log_last
 
 	my @time_struct = localtime();
 	my $string_ts   = sprintf('%02d/%02d %02d:%02d:%02d: ',
-		(1+$time_struct[4]),    # month
-		$time_struct[3],        # day of month
-		$time_struct[2],        # hour
-		$time_struct[1],        # minute
-		$time_struct[0]         # second
+		(1+$time_struct[4]), # month (0-based: 0-11)
+		$time_struct[3],     # day of month
+		$time_struct[2],     # hour
+		$time_struct[1],     # minute
+		$time_struct[0]      # second
 	);
 
 	push(@{$log->{'last'}}, $string_ts . $string);
@@ -453,6 +522,8 @@ sub log_last_prune
 
 		next;
 	}
+
+	return(1);
 }
 
 sub cache_init
@@ -616,12 +687,14 @@ sub regex_matched
 {
 	my ($channelrec, $channel, $client, $regex, $message) = @_;
 
-	log_last('match ' . $client->{'nick'} . ' ' . $client->{'host'} . ' [' . $regex->{'reason'} . '] ' . $channel->{'server'} . '/' . $channel->{'name'} . ': "' . $message . '"');
+	log_last( 'match ' . $client->{'nick'} . '!' . $client->{'host'} . ' [' . $regex->{'reason'} . '] on ' . $channel->{'server'} . '/' . $channel->{'name'});
+	log_write('match ' . $client->{'nick'} . '!' . $client->{'host'} . ' [' . $regex->{'reason'} . '] on ' . $channel->{'server'} . '/' . $channel->{'name'} . ': "' . $message . '"');
 
 	if ($channel->{'match_kick'})
 	{
 		if ($channelrec->{'chanop'})
 		{
+			log_last('kick ' . $client->{'nick'} . '!' . $client->{'host'} . ' [' . $regex->{'reason'} . '] on ' . $channel->{'server'} . '/' . $channel->{'name'});
 			$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex->{'reason'});
 		}
 	}
@@ -630,6 +703,7 @@ sub regex_matched
 	{
 		if ($channelrec->{'server'}->ignore_check($client->{'nick'}, $client->{'host'}, $channel->{'name'}, $message, Irssi::level2bits('PUBLIC')))
 		{
+			log_last('ignored already ' . $client->{'nick'} . '!' . $client->{'host'});
 			return(1);
 		}
 
@@ -643,10 +717,13 @@ sub regex_matched
 			Irssi::timeout_add_once((1000 * $config_match_ignore_time_abs), sub
 			{
 				$channelrec->command('^UNIGNORE ' . $clientname);
+				log_last('unignored ' . $client->{'nick'} . '!' . $client->{'host'} . ' (after ' . $config_match_ignore_time_abs . 's)');
 
 				return(1);
 
 			}, undef);
+
+			log_last('ignored ' . $client->{'nick'} . '!' . $client->{'host'} . ' (' . $config_match_ignore_time_abs . 's)');
 
 			if ($config_match_ignore_time_abs == $channel->{'match_ignore_time'})
 			{
@@ -743,7 +820,12 @@ sub signal_message_join_hm100
 		return(1);
 	}
 
-	cache_channel_add_client($channel, $nickrec->{'nick'}, $nickrec->{'host'});
+	my $client = cache_channel_add_client($channel, $nickrec->{'nick'}, $nickrec->{'host'});
+
+	if (not defined($client))
+	{
+		return(1);
+	}
 
 	return(1);
 }
@@ -857,7 +939,7 @@ sub command_mh_freekicknore
 {
 	my ($data, $server, $witem) = @_;
 
-	Irssi::print('mh_freekicknore v0.05 Copyright (c) 2018  Michael Hansen');
+	Irssi::print('mh_freekicknore v0.06 Copyright (c) 2018  Michael Hansen');
 
 	# print lastlog messages
 	#
