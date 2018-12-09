@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-08T00:39:38Z)
-# mh_freekicknore v0.06
+# mh_freekicknore.pl (2018-12-09T07:00:00Z)
+# mh_freekicknore v0.07
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -64,6 +64,10 @@
 #     enable/disable logging to a datestamped file structure YYYY/MM/DD.log
 #     under .irssi/mh_freekicknore/log/
 #
+#   mh_freekicknore_log_last_size  (int, default: 42)
+#     maximum number of lines to keep in the lastlog printed with the command
+#     /mh_freekicknore (the lastlog is available regardles of the log setting)
+#
 #   mh_freekicknore_match_ignore  (bool, default: ON)
 #     enable/disable ignoring the client after a match is made
 #
@@ -97,16 +101,9 @@
 #
 #   * log
 #     - nicer aligning log messages
-#     - day-changed notice (not just vague 'log closed/opened')
-#     - day-changed check as a separate sub()
-#     - log-file day-changed check on a timeout so it happens a little more
-#       frequent and timely (then we can use just ts_dom for both checks)
-#     - lastlog size should be a setting
 #     - lastlog prune could be done on timeout and before printing, theres no
-#       need to remove (the preditable) 1 line on each log_last() call
+#       need to remove (the predictable) 1 line on each log_last() call
 #     - re-use log_last() timestamp in log_write(), etc
-#     - lastlog with reduced info and full info in logfile - less noise in
-#       client lastlog command
 #     - log->{'last'} initialised to avoid issue mentioned in /mh_feekicknore
 #     - log all ignored text?
 #     - log setting and fh reality can get out of sync on errors
@@ -131,9 +128,6 @@
 #
 #   * theme formats
 #     - prettyfi
-#     - _match_ignore format doesnt need ! between nick and host in default
-#       theme: 23:48 -!- mh_freekicknore: ignore mt![~mt@123.20.240.182] [spam]
-#       (40s)
 #     - formats for command output (ie. decent %| indent for lastlog messages)
 #     - msglevels
 #     - documentation (in 'theme formats' section and /HELP)
@@ -142,9 +136,13 @@
 #     - global settings are currently just pushed down to all channels. should
 #       be per channel/regex
 #     - not much validation is done on setting values, so be careful
+#     - config_check_init() should accept and pass on a message down the chain
+#       to (possibly not only) log_init() -> log_open/log_close. so we can put
+#       'script loaded' or 'setup changed' as file-open/close reason in log
 #
 #   * command /mh_freekicknore
-#     - config, current tags/channels matching config, and cache
+#     - a little verbose/basic/raw/cryptic now. cmdline arguments could
+#       partially help
 #     - documentation (in 'commands' section and /HELP)
 #
 #   * command /HELP
@@ -154,6 +152,45 @@
 #   * source code comments
 #
 # history:
+#
+#   v0.07 (2018-12-09T07:00:00Z)
+#     * added setting _log_last_size (int, default: 42) limit for the number of
+#       lines kept in lastlog (from todo)
+#     * updated command /mh_freekicknore
+#       - version banner now use $VERSION instead of hardcoded value. one less
+#         difference in diff between versions
+#       - print currently configured channels ($config) (from todo)
+#       - print currently cached channels ($cache) and their status (from todo)
+#       - print current irssi channels and their status in $config/$cache
+#         (from todo)
+#       - lastlog now like above lists, printing <empty> on a separate line
+#         when empty instead of "lastlog: empty"
+#       - updated todo section with new info
+#     * updated theme format _match_ignore
+#       - changed ! to space beween nick and userhost. looked wrong in irssi
+#         default theme "-!- mh_freekicknore: ignore nick![~user@host] [spam]
+#         (40s)" (from todo)
+#     * updated log handling
+#       - moved day-changed check from log_write() to log_check_daychange()
+#         (from todo)
+#       - log_check_daychange() piggyback on timeoute_cache_prune() for more
+#         timely and frequent checks (not just on writes anymore) (from todo)
+#       - global variable initialisation, moved from globals to log_init()
+#         (from todo)
+#       - added a few comments to log_init() (from todo)
+#       - log_open() and log_close() now take message to print in log and
+#         lastlog. using it a few places (incl. log_check_daychange() removing
+#         a todo)
+#     * updated cache handling
+#       - moved finding a cached server into cache_get_server() and use it in
+#         cache_get_channel();
+#     * onload() now has its own proper timeout_onload()
+#     * moved config (re)init check out of signal_setup_changed() and into own
+#       config_check_init(). now used in onload() and signal_setup_changed()
+#       (this also adds a new todo)
+#     * updated todo section
+#       - removed entry done in v0.06 (log-file/lastlog info separation)
+#       - typo fixed (preditable -> predictable)
 #
 #   v0.06 (2018-12-08T00:39:38Z)
 #     * updated regex_matched() to log a few more events and details, also only
@@ -221,7 +258,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -232,7 +269,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-08T00:39:38Z',
+	'changed'     => '2018-12-09T07:00:00Z',
 );
 
 ###############################################################################
@@ -241,14 +278,7 @@ our %IRSSI   =
 #
 ###############################################################################
 
-our $log    =
-{
-	'fh'       => undef, # log-file handle when log enabled and file open
-	'ts_year'  => 0,     # log-file timestamp year
-	'ts_month' => 0,     # log-file timestamp month
-	'ts_dom'   => 0,     # log-file timestamp day of month
-	'last'     => undef, # array of lastlog messages
-};
+our $log    = undef;
 our $config = undef;
 our $cache  = undef;
 our @REGEX  =
@@ -360,6 +390,20 @@ sub config_init
 	return(1);
 }
 
+sub config_check_init
+{
+	log_init();
+
+	if (config_init())
+	{
+		cache_init();
+	}
+
+	log_last_prune();
+
+	return(1);
+}
+
 sub config_get_channel
 {
 	my ($servertag_lc, $channelname_lc) = @_;
@@ -385,17 +429,38 @@ sub config_get_channel
 
 sub log_init
 {
+	# initialise global $log if it is not already done
+	if (not defined($log))
+	{
+		$log =
+		{
+			'fh'       => undef, # log-file handle when log enabled and file
+			                     # open
+			'ts_year'  => 0,     # log-file timestamp year
+			'ts_month' => 0,     # log-file timestamp month
+			'ts_dom'   => 0,     # log-file timestamp day of month
+			'last'     => undef, # array of lastlog messages
+		};
+	}
+
+	# open/close log-file if setting requires it (on load or setting changed)
 	if (Irssi::settings_get_bool($IRSSI{'name'} . '_log'))
 	{
+		# log setting is on
+
 		if (not defined($log->{'fh'}))
 		{
+			# log setting is on, but no log is open. open it
 			log_open();
 		}
 	}
 	else
 	{
+		# log setting is off
+
 		if (defined($log->{'fh'}))
 		{
+			# log setting is off, but log is open. close it
 			log_close();
 		}
 	}
@@ -405,6 +470,17 @@ sub log_init
 
 sub log_open
 {
+	my ($message) = @_;
+
+	if (not length($message))
+	{
+		$message = '';
+	}
+	else
+	{
+		$message = ' (' . $message . ')';
+	}
+
 	my @time_struct    = localtime();
 	$log->{'ts_year'}  = (1900+$time_struct[5]); # counting from 1900
 	$log->{'ts_month'} = (1+$time_struct[4]);    # 0-based: 0-11
@@ -419,7 +495,7 @@ sub log_open
 
 	if (not open($log->{'fh'}, '>>:encoding(UTF-8)', $filename))
 	{
-		log_close();
+		log_close('open failed' . $message);
 
 		return(0);
 	}
@@ -427,13 +503,16 @@ sub log_open
 	# enable automatic flush after each write to the filehandle
 	$log->{'fh'}->autoflush(1);
 
-	log_last('log opened');
+	log_last('log opened' . $message);
 
 	return(1);
 }
 
 sub log_close
 {
+	my ($message) = @_;
+
+
 	# these need to be zeroed out before the call to log_write() (called in
 	# log_last() below) so it does not try to detect day-changed if we are
 	# logging a close in an already ongoing day-change
@@ -445,9 +524,41 @@ sub log_close
 
 	if (defined($log->{'fh'}))
 	{
-		log_last('log closed');
+		if (not length($message))
+		{
+			$message = '';
+		}
+		else
+		{
+			$message = ' (' . $message . ')';
+		}
+
+		log_last('log closed' . $message);
 		close($log->{'fh'});
 		$log->{'fh'} = undef;
+	}
+
+	return(1);
+}
+
+sub log_check_daychange
+{
+	# log-file day-changed check unless were already in an ongoing day-changed
+	# ($log->{'fd'} can be assumed open when $log->{'ts_dom'} is non-zero)
+	if ($log->{'ts_dom'} != 0)
+	{
+		my @time_struct = localtime();
+		my $ts_year     = (1900+$time_struct[5]); # counting from 1900
+		my $ts_month    = (1+$time_struct[4]);    # 0-based: 0-11
+		my $ts_dom      = $time_struct[3];        # day of month
+
+		# we do but probably dont need to check against year and month changes
+		# in addition to day-of-month - provided we check often enough
+		if (($ts_dom != $log->{'ts_dom'}) or ($ts_month != $log->{'ts_month'}) or ($ts_year != $log->{'ts_year'}))
+		{
+			log_close('day changed');
+			log_open('day changed');
+		}
 	}
 
 	return(1);
@@ -462,21 +573,12 @@ sub log_write
 		return(0);
 	}
 
+	log_check_daychange();
+
 	my @time_struct = localtime();
 	my $ts_year     = (1900+$time_struct[5]); # counting from 1900
 	my $ts_month    = (1+$time_struct[4]);    # 0-based: 0-11
 	my $ts_dom      = $time_struct[3];        # day of month
-
-	# log-file day-changed check unless were already in an ongoing day-changed
-	# and just want to log it (see log_close() for details)
-	if ($log->{'ts_dom'} != 0)
-	{
-		if (($ts_dom != $log->{'ts_dom'}) or ($ts_month != $log->{'ts_month'}) or ($ts_year != $log->{'ts_year'}))
-		{
-			log_close();
-			log_open();
-		}
-	}
 
 	my $string_ts = sprintf('%04d-%02d-%02dT%02d:%02d:%02d: ',
 		$ts_year,
@@ -516,7 +618,7 @@ sub log_last
 
 sub log_last_prune
 {
-	while (@{$log->{'last'}} > 50)
+	while (@{$log->{'last'}} > Irssi::settings_get_int( $IRSSI{'name'} . '_log_last_size'))
 	{
 		shift(@{$log->{'last'}});
 
@@ -571,15 +673,29 @@ sub cache_prune
 	return(1);
 }
 
+sub cache_get_server
+{
+	my ($servertag_lc) = @_;
+
+	if (exists($cache->{'server'}->{$servertag_lc}))
+	{
+		return($cache->{'server'}->{$servertag_lc});
+	}
+
+	return(undef);
+}
+
 sub cache_get_channel
 {
 	my ($servertag_lc, $channelname_lc) = @_;
 
-	if (exists($cache->{'server'}->{$servertag_lc}))
+	my $server = cache_get_server($servertag_lc);
+
+	if (defined($server))
 	{
-		if (exists($cache->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc}))
+		if (exists($server->{'channel'}->{$channelname_lc}))
 		{
-			return($cache->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc});
+			return($server->{'channel'}->{$channelname_lc});
 		}
 	}
 
@@ -739,18 +855,19 @@ sub onload
 {
 	Irssi::theme_register
 	([
-		$IRSSI{'name'} . '_match_ignore', $IRSSI{'name'} . ': ignore {channick_hilight $0}!{chanhost_hilight $1} {reason $2} ($3)', # nick, host, reason, timeout
+		$IRSSI{'name'} . '_match_ignore', $IRSSI{'name'} . ': ignore {channick_hilight $0} {chanhost_hilight $1} {reason $2} ($3)', # nick, host, reason, timeout
 	]);
 
 	Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'},                       '');
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_log',               0);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_log_last_size',     42);
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore',      1);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore_time', 40);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_join_time',   20);
 	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',        1);
 	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_prune_delay',       60);
 
-	signal_setup_changed();
+	config_check_init();
 
 	Irssi::signal_add(         'setup changed',  'signal_setup_changed');
 	Irssi::signal_add_priority('message join',   'signal_message_join_hm100',   Irssi::SIGNAL_PRIORITY_HIGH() - 100);
@@ -772,14 +889,7 @@ sub onload
 
 sub signal_setup_changed
 {
-	log_init();
-
-	if (config_init())
-	{
-		cache_init();
-	}
-
-	return(1);
+	return(config_check_init());
 }
 
 sub signal_message_join_hm100
@@ -908,10 +1018,22 @@ sub signal_message_public_hm100
 
 sub timeout_cache_prune
 {
+	# check for day-change if we have an open log-file
+	if (defined($log->{'fh'}))
+	{
+		log_check_daychange();
+	}
+
+	# prunce cache of outdated entries and start the next timeout
 	cache_prune();
 	$cache->{'prune_tout'} = Irssi::timeout_add_once(1000 * $config->{'prune_delay'}, 'timeout_cache_prune', undef);
 
 	return(1);
+}
+
+sub timeout_onload
+{
+	return(onload());
 }
 
 ###############################################################################
@@ -939,18 +1061,162 @@ sub command_mh_freekicknore
 {
 	my ($data, $server, $witem) = @_;
 
-	Irssi::print('mh_freekicknore v0.06 Copyright (c) 2018  Michael Hansen');
+	# print script version banner
+	Irssi::print('mh_freekicknore v' . $VERSION . ' Copyright (c) 2018  Michael Hansen');
+
+	my $count = 0;
+
+	# print $config channels alphabetically sorted
+	Irssi::print(' configured channels:');
+
+	for my $servertag (sort({$a cmp $b} keys(%{$config->{'server'}})))
+	{
+		for my $channelname (sort({$a cmp $b} keys(%{$config->{'server'}->{$servertag}->{'channel'}})))
+		{
+			$count += 1;
+			Irssi::print('  ' . $servertag . '/' . $channelname);
+		}
+	}
+
+	if ($count == 0)
+	{
+		Irssi::print('  <none>');
+	}
+	else
+	{
+		$count = 0;
+	}
+
+	# print $cache channels alphabetically sorted
+	Irssi::print(' cached channels:');
+
+	for my $servertag (sort({$a cmp $b} keys(%{$cache->{'server'}})))
+	{
+		for my $channelname (sort({$a cmp $b} keys(%{$cache->{'server'}->{$servertag}->{'channel'}})))
+		{
+			$count += 1;
+
+			my $channelrec = undef;
+			my $serverrec  = Irssi::server_find_tag($servertag);
+
+			if (defined($serverrec))
+			{
+				$channelrec = $serverrec->channel_find($channelname);
+			}
+
+			if (defined($channelrec))
+			{
+				my $not_synced = '';
+
+				if (not $channelrec->{'synced'})
+				{
+					$not_synced = ' (not synced)';
+				}
+
+				if (config_get_channel($servertag, $channelname))
+				{
+					# cached channel joined and enabled
+					Irssi::print('  * ' . $servertag . '/' . $channelname . $not_synced);
+				}
+				else
+				{
+					# cached channel joined and disabled
+					Irssi::print('  - ' . $servertag . '/' . $channelname . $not_synced);
+				}
+			}
+			else
+			{
+				if (config_get_channel($servertag, $channelname))
+				{
+					# cached channel not joined and enabled
+					Irssi::print('  + ' . $servertag . '/' . $channelname);
+				}
+				else
+				{
+					# cached channel not joined and disabled
+					Irssi::print('  . ' . $servertag . '/' . $channelname);
+				}
+			}
+		}
+	}
+
+	if ($count == 0)
+	{
+		Irssi::print('  <none>');
+	}
+	else
+	{
+		$count = 0;
+	}
+
+	# print current active irssi channels and their status in $config/$cache
+	# alphabetically sorted
+	Irssi::print(' active irssi channels:');
+
+	for my $serverrec (sort({lc($a->{'tag'}) cmp lc($b->{'tag'})} Irssi::servers()))
+	{
+		my $servertag_lc = lc($serverrec->{'tag'});
+
+		for my $channelrec (sort({lc($a->{'name'}) cmp lc($b->{'name'})} $serverrec->channels()))
+		{
+			$count += 1;
+
+			my $not_synced = '';
+
+			if (not $channelrec->{'synced'})
+			{
+				$not_synced = ' (not synced)';
+			}
+
+			my $channelname_lc = lc($channelrec->{'name'});
+
+			if (config_get_channel($servertag_lc, $channelname_lc))
+			{
+				if (cache_get_channel($servertag_lc, $channelname_lc))
+				{
+					# in $config and in $cache
+					Irssi::print('  * ' . $servertag_lc . '/' . lc($channelrec->{'name'}) . $not_synced);
+				}
+				else
+				{
+					# in $config but not in $cache
+					Irssi::print('  + ' . $servertag_lc . '/' . lc($channelrec->{'name'}) . $not_synced);
+				}
+			}
+			else
+			{
+				if (cache_get_channel($servertag_lc, $channelname_lc))
+				{
+					# not in $config but in cache
+					Irssi::print('  - ' . $servertag_lc . '/' . lc($channelrec->{'name'}) . $not_synced);
+				}
+				else
+				{
+					# not in $config and not in cache
+					Irssi::print('  . ' . $servertag_lc . '/' . lc($channelrec->{'name'}) . $not_synced);
+				}
+			}
+		}
+	}
+
+	if ($count == 0)
+	{
+		Irssi::print('  <none>');
+	}
+	else
+	{
+		$count = 0;
+	}
 
 	# print lastlog messages
-	#
+	Irssi::print(' lastlog:');
+
 	# wrap in check for if (defined($log->{'last'})) if this can be called with
 	# $log->{'last'} undefined, otherwise we get the warning: 'Can't use an
 	# undefined value as an ARRAY reference'. there should always be at least
 	# 'script loaded' in our lastlog, so we do not check
 	if (@{$log->{'last'}})
 	{
-		Irssi::print(' lastlog:');
-
 		for my $string (@{$log->{'last'}})
 		{
 			Irssi::print('  ' . $string);
@@ -960,7 +1226,7 @@ sub command_mh_freekicknore
 	}
 	else
 	{
-		Irssi::print(' lastlog: empty');
+		Irssi::print('  <empty>');
 	}
 
 	return(1);
@@ -977,7 +1243,7 @@ sub command_mh_freekicknore
 #
 # i believe newer irssi can use a timeout minimum of 10ms but use 100ms for
 # backwards compatibility
-Irssi::timeout_add_once(100, 'onload', undef);
+Irssi::timeout_add_once(100, 'timeout_onload', undef);
 
 1;
 
