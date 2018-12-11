@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-09T07:00:00Z)
-# mh_freekicknore v0.07
+# mh_freekicknore.pl (2018-12-11T05:00:30Z)
+# mh_freekicknore v0.08
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -104,7 +104,6 @@
 #     - lastlog prune could be done on timeout and before printing, theres no
 #       need to remove (the predictable) 1 line on each log_last() call
 #     - re-use log_last() timestamp in log_write(), etc
-#     - log->{'last'} initialised to avoid issue mentioned in /mh_feekicknore
 #     - log all ignored text?
 #     - log setting and fh reality can get out of sync on errors
 #     - documentation (in log section and in /HELP)
@@ -152,6 +151,13 @@
 #   * source code comments
 #
 # history:
+#
+#   v0.08 (2018-12-11T05:00:30Z)
+#     * fixed lastlog using an undefined as ARRAY causing an error
+#     * fixed log_close() cosmetic code change, removed an empty line
+#     * fixed timeout_cache_prune() comment typo (prunce -> prune)
+#     * fixed regex_matched() ignored notice printing a hash instead of the
+#       reason
 #
 #   v0.07 (2018-12-09T07:00:00Z)
 #     * added setting _log_last_size (int, default: 42) limit for the number of
@@ -258,7 +264,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -269,7 +275,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-09T07:00:00Z',
+	'changed'     => '2018-12-11T05:00:30Z',
 );
 
 ###############################################################################
@@ -439,7 +445,7 @@ sub log_init
 			'ts_year'  => 0,     # log-file timestamp year
 			'ts_month' => 0,     # log-file timestamp month
 			'ts_dom'   => 0,     # log-file timestamp day of month
-			'last'     => undef, # array of lastlog messages
+			'last'     => [],    # array of lastlog messages
 		};
 	}
 
@@ -511,7 +517,6 @@ sub log_open
 sub log_close
 {
 	my ($message) = @_;
-
 
 	# these need to be zeroed out before the call to log_write() (called in
 	# log_last() below) so it does not try to detect day-changed if we are
@@ -843,7 +848,7 @@ sub regex_matched
 
 			if ($config_match_ignore_time_abs == $channel->{'match_ignore_time'})
 			{
-				$channelrec->printformat(Irssi::MSGLEVEL_CRAP() | Irssi::MSGLEVEL_NOHILIGHT(), $IRSSI{'name'} . '_match_ignore', $client->{'nick'}, $client->{'host'}, $regex, $config_match_ignore_time_abs . 's');
+				$channelrec->printformat(Irssi::MSGLEVEL_CRAP() | Irssi::MSGLEVEL_NOHILIGHT(), $IRSSI{'name'} . '_match_ignore', $client->{'nick'}, $client->{'host'}, $regex->{'reason'}, $config_match_ignore_time_abs . 's');
 			}
 		}
 	}
@@ -1024,7 +1029,7 @@ sub timeout_cache_prune
 		log_check_daychange();
 	}
 
-	# prunce cache of outdated entries and start the next timeout
+	# prune cache of outdated entries and start the next timeout
 	cache_prune();
 	$cache->{'prune_tout'} = Irssi::timeout_add_once(1000 * $config->{'prune_delay'}, 'timeout_cache_prune', undef);
 
@@ -1211,10 +1216,6 @@ sub command_mh_freekicknore
 	# print lastlog messages
 	Irssi::print(' lastlog:');
 
-	# wrap in check for if (defined($log->{'last'})) if this can be called with
-	# $log->{'last'} undefined, otherwise we get the warning: 'Can't use an
-	# undefined value as an ARRAY reference'. there should always be at least
-	# 'script loaded' in our lastlog, so we do not check
 	if (@{$log->{'last'}})
 	{
 		for my $string (@{$log->{'last'}})
