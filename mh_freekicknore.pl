@@ -1,7 +1,7 @@
 ###############################################################################
 #
-# mh_freekicknore.pl (2018-12-11T05:00:30Z)
-# mh_freekicknore v0.08
+# mh_freekicknore.pl (2018-12-20T19:19:19Z)
+# mh_freekicknore v0.09
 # Copyright (c) 2018  Michael Hansen
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -83,6 +83,22 @@
 #   mh_freekicknore_match_kick  (bool, default: ON)
 #     enable/disable kicking the client after a match is made (if you are op)
 #
+#   mh_freekicknore_match_userpriv_halfop  (bool, default: OFF)
+#     enable/disable matching regular expression if the client sending the text
+#     is halfop (+h) on the channel
+#
+#   mh_freekicknore_match_userpriv_op  (bool, default: OFF)
+#     enable/disable matching regular expression if the client sending the text
+#     is op (+o) on the channel
+#
+#   mh_freekicknore_match_userpriv_oper  (bool, default: OFF)
+#     enable/disable matching regular expression if the client sending the text
+#     is server operator
+#
+#   mh_freekicknore_match_userpriv_voice  (bool, default: OFF)
+#     enable/disable matching regular expression if the client sending the text
+#     is voice (+v) on the channel
+#
 #   mh_freekicknore_prune_delay  (int, default: 60)
 #     seconds delay between pruning the cache of outdated data. you probably
 #     dont need to change this
@@ -90,26 +106,20 @@
 # todo:
 #
 #   * features
-#     - allow matching ops/voice/halfop/oper
 #     - ban/!kick/etc alternatives to /kick
 #     - flood protection
-#     - catch "nick not on channel" errors when kicking and silence them
-#       to reduce noise. esp when multiple ops run the script
 #
 #   * general
+#     - not much validation is done on setting values, so be careful
+#     - persistent per regex/channel/server settings
 #     - move global variable initialisation into *_init() (also @REGEX)
 #
 #   * log
 #     - nicer aligning log messages
-#     - lastlog prune could be done on timeout and before printing, theres no
-#       need to remove (the predictable) 1 line on each log_last() call
 #     - re-use log_last() timestamp in log_write(), etc
 #     - log all ignored text?
 #     - log setting and fh reality can get out of sync on errors
 #     - documentation (in log section and in /HELP)
-#
-#   * config
-#     - persistent storage of per channel configuration
 #
 #   * cache
 #     - cache matches temporarilly and check joins against them
@@ -117,31 +127,20 @@
 #     - @REGEX copied into cache->... so we can have 'enabled' flag in @REGEX
 #       that isnt copied into cache->@REGEX and wont slow down loop
 #
-#   * regex
-#     - per regex options
-#     - configurable and stored persistently
+#   * kicknick
+#     - settings for kicknick behavior (currently experimentally hardcoded)
 #
 #   * ignore
 #     - ignore-time of 0 should probably be allowed to ignore one-liners
 #     - reset ignore timeout if client is re-matched while ignored
 #
 #   * theme formats
-#     - prettyfi
 #     - formats for command output (ie. decent %| indent for lastlog messages)
-#     - msglevels
+#     - prettyfi current and add  msglevels
 #     - documentation (in 'theme formats' section and /HELP)
 #
-#   * settings
-#     - global settings are currently just pushed down to all channels. should
-#       be per channel/regex
-#     - not much validation is done on setting values, so be careful
-#     - config_check_init() should accept and pass on a message down the chain
-#       to (possibly not only) log_init() -> log_open/log_close. so we can put
-#       'script loaded' or 'setup changed' as file-open/close reason in log
-#
 #   * command /mh_freekicknore
-#     - a little verbose/basic/raw/cryptic now. cmdline arguments could
-#       partially help
+#     - a little verbose/basic/raw/cryptic now. cmdline arguments could help
 #     - documentation (in 'commands' section and /HELP)
 #
 #   * command /HELP
@@ -151,6 +150,17 @@
 #   * source code comments
 #
 # history:
+#
+#   v0.09 (2018-12-20T19:19:19Z)
+#     * allow matching ops/voice/halfop/oper (from todo)
+#       - added settings mh_freekicknore_match_userpriv_halfop/op/oper/voice
+#     * catch "nick not on channel" errors when kicking and silence them to
+#       reduce noise. esp when multiple ops run the script (from todo)
+#     * lastlog prune done on timeout and before printing instead of after each
+#       call to log_last() (from todo)
+#     * config_check_init() accepts and passes on a message down the chain to
+#       log_init() -> log_open()/log_close() and uses it (from todo)
+#     * updated todo section somewhat
 #
 #   v0.08 (2018-12-11T05:00:30Z)
 #     * fixed lastlog using an undefined as ARRAY causing an error
@@ -264,7 +274,7 @@ use Time::Local ();
 #
 ###############################################################################
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 our %IRSSI   =
 (
 	'name'        => 'mh_freekicknore',
@@ -275,7 +285,7 @@ our %IRSSI   =
 	'authors'     => 'Michael Hansen',
 	'contact'     => 'mh on IRCnet #help',
 	'license'     => 'ISC',
-	'changed'     => '2018-12-11T05:00:30Z',
+	'changed'     => '2018-12-20T19:19:19Z',
 );
 
 ###############################################################################
@@ -324,12 +334,16 @@ sub string_trim_space
 
 sub config_init
 {
-	my $config_string            = Irssi::settings_get_str( $IRSSI{'name'});
-	my $config_match_ignore      = Irssi::settings_get_bool($IRSSI{'name'} . '_match_ignore');
-	my $config_match_ignore_time = Irssi::settings_get_int( $IRSSI{'name'} . '_match_ignore_time');
-	my $config_match_join_time   = Irssi::settings_get_int( $IRSSI{'name'} . '_match_join_time');
-	my $config_match_kick        = Irssi::settings_get_bool($IRSSI{'name'} . '_match_kick');
-	my $config_prune_delay       = Irssi::settings_get_int( $IRSSI{'name'} . '_prune_delay');
+	my $config_string                = Irssi::settings_get_str( $IRSSI{'name'});
+	my $config_match_ignore          = Irssi::settings_get_bool($IRSSI{'name'} . '_match_ignore');
+	my $config_match_ignore_time     = Irssi::settings_get_int( $IRSSI{'name'} . '_match_ignore_time');
+	my $config_match_join_time       = Irssi::settings_get_int( $IRSSI{'name'} . '_match_join_time');
+	my $config_match_kick            = Irssi::settings_get_bool($IRSSI{'name'} . '_match_kick');
+	my $config_match_userpriv_halfop = Irssi::settings_get_bool($IRSSI{'name'} . '_match_userpriv_halfop');
+	my $config_match_userpriv_op     = Irssi::settings_get_bool($IRSSI{'name'} . '_match_userpriv_op');
+	my $config_match_userpriv_oper   = Irssi::settings_get_bool($IRSSI{'name'} . '_match_userpriv_oper');
+	my $config_match_userpriv_voice  = Irssi::settings_get_bool($IRSSI{'name'} . '_match_userpriv_voice');
+	my $config_prune_delay           = Irssi::settings_get_int( $IRSSI{'name'} . '_prune_delay');
 
 	if (defined($config))
 	{
@@ -353,6 +367,22 @@ sub config_init
 		{
 			$config = undef;
 		}
+		elsif ($config_match_userpriv_halfop != $config->{'match_userpriv_halfop'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_userpriv_op != $config->{'match_userpriv_op'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_userpriv_oper != $config->{'match_userpriv_oper'})
+		{
+			$config = undef;
+		}
+		elsif ($config_match_userpriv_voice != $config->{'match_userpriv_voice'})
+		{
+			$config = undef;
+		}
 		elsif ($config_prune_delay != $config->{'prune_delay'})
 		{
 			$config = undef;
@@ -364,12 +394,16 @@ sub config_init
 		}
 	}
 
-	$config->{'string'}            = $config_string;
-	$config->{'match_ignore'}      = $config_match_ignore;
-	$config->{'match_ignore_time'} = $config_match_ignore_time;
-	$config->{'match_join_time'}   = $config_match_join_time;
-	$config->{'match_kick'}        = $config_match_kick;
-	$config->{'prune_delay'}       = $config_prune_delay;
+	$config->{'string'}                = $config_string;
+	$config->{'match_ignore'}          = $config_match_ignore;
+	$config->{'match_ignore_time'}     = $config_match_ignore_time;
+	$config->{'match_join_time'}       = $config_match_join_time;
+	$config->{'match_kick'}            = $config_match_kick;
+	$config->{'match_userpriv_halfop'} = $config_match_userpriv_halfop;
+	$config->{'match_userpriv_op'}     = $config_match_userpriv_op;
+	$config->{'match_userpriv_oper'}   = $config_match_userpriv_oper;
+	$config->{'match_userpriv_voice'}  = $config_match_userpriv_voice;
+	$config->{'prune_delay'}           = $config_prune_delay;
 
 	for my $config_lc (split(/\s/, lc($config_string)))
 	{
@@ -384,11 +418,15 @@ sub config_init
 		{
 			$config->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc} =
 			{
-				'enabled'           => 1,
-				'match_ignore'      => $config->{'match_ignore'},
-				'match_ignore_time' => $config->{'match_ignore_time'},
-				'match_join_time'   => $config->{'match_join_time'},
-				'match_kick'        => $config->{'match_kick'},
+				'enabled'               => 1,
+				'match_ignore'          => $config->{'match_ignore'},
+				'match_ignore_time'     => $config->{'match_ignore_time'},
+				'match_join_time'       => $config->{'match_join_time'},
+				'match_userpriv_halfop' => $config->{'match_userpriv_halfop'},
+				'match_userpriv_op'     => $config->{'match_userpriv_op'},
+				'match_userpriv_oper'   => $config->{'match_userpriv_oper'},
+				'match_userpriv_voice'  => $config->{'match_userpriv_voice'},
+				'match_kick'            => $config->{'match_kick'},
 			};
 		}
 	}
@@ -398,7 +436,14 @@ sub config_init
 
 sub config_check_init
 {
-	log_init();
+	my ($message) = @_;
+
+	if (not defined($message))
+	{
+		$message = 'setup changed';
+	}
+
+	log_init($message);
 
 	if (config_init())
 	{
@@ -435,6 +480,8 @@ sub config_get_channel
 
 sub log_init
 {
+	my ($message) = @_;
+
 	# initialise global $log if it is not already done
 	if (not defined($log))
 	{
@@ -457,7 +504,7 @@ sub log_init
 		if (not defined($log->{'fh'}))
 		{
 			# log setting is on, but no log is open. open it
-			log_open();
+			log_open($message);
 		}
 	}
 	else
@@ -467,7 +514,7 @@ sub log_init
 		if (defined($log->{'fh'}))
 		{
 			# log setting is off, but log is open. close it
-			log_close();
+			log_close($message);
 		}
 	}
 
@@ -616,8 +663,6 @@ sub log_last
 
 	push(@{$log->{'last'}}, $string_ts . $string);
 
-	log_last_prune();
-
 	return(1);
 }
 
@@ -656,6 +701,16 @@ sub cache_prune
 
 	for my $servertag (keys(%{$cache->{'server'}}))
 	{
+		for my $kicknickname (keys(%{$cache->{'server'}->{$servertag}->{'kicknick'}}))
+		{
+			my $kicknick = $cache->{'server'}->{$servertag}->{'kicknick'}->{$kicknickname};
+
+			if (($now - $kicknick->{'kick'}) > 60)
+			{
+				cache_server_del_kicknick($cache->{'server'}->{$servertag}, $kicknickname);
+			}
+		}
+
 		for my $channelname (keys(%{$cache->{'server'}->{$servertag}->{'channel'}}))
 		{
 			my $channel = $cache->{'server'}->{$servertag}->{'channel'}->{$channelname};
@@ -688,6 +743,48 @@ sub cache_get_server
 	}
 
 	return(undef);
+}
+
+sub cache_server_get_kicknick
+{
+	my ($server, $clientnick) = @_;
+
+	if (exists($server->{'kicknick'}->{$clientnick}))
+	{
+		return($server->{'kicknick'}->{$clientnick});
+	}
+
+	return(undef);
+}
+
+sub cache_server_add_kicknick
+{
+	my ($server, $clientnick) = @_;
+
+	my $kicknick =
+	{
+		'kick' => time(),
+		'nick' => $clientnick,
+	};
+
+	$server->{'kicknick'}->{$clientnick} = $kicknick;
+	$server->{'kicknick_last'} = $kicknick->{'kick'};
+
+	return($kicknick);
+}
+
+sub cache_server_del_kicknick
+{
+	my ($server, $clientnick) = @_;
+
+	if (exists($server->{'kicknick'}->{$clientnick}))
+	{
+		delete($server->{'kicknick'}->{$clientnick});
+
+		return(1);
+	}
+
+	return(0);
 }
 
 sub cache_get_channel
@@ -724,11 +821,15 @@ sub cache_add_channel
 	{
 		$channel =
 		{
-			'enabled'           => $channel->{'enabled'},
-			'match_ignore'      => $channel->{'match_ignore'},
-			'match_ignore_time' => $channel->{'match_ignore_time'},
-			'match_join_time'   => $channel->{'match_join_time'},
-			'match_kick'        => $channel->{'match_kick'},
+			'enabled'               => $channel->{'enabled'},
+			'match_ignore'          => $channel->{'match_ignore'},
+			'match_ignore_time'     => $channel->{'match_ignore_time'},
+			'match_join_time'       => $channel->{'match_join_time'},
+			'match_kick'            => $channel->{'match_kick'},
+			'match_userpriv_halfop' => $channel->{'match_userpriv_halfop'},
+			'match_userpriv_op'     => $channel->{'match_userpriv_op'},
+			'match_userpriv_oper'   => $channel->{'match_userpriv_oper'},
+			'match_userpriv_voice'  => $channel->{'match_userpriv_voice'},
 		};
 	}
 	else
@@ -741,6 +842,11 @@ sub cache_add_channel
 
 	$channel->{'server'} = $servertag_lc;
 	$channel->{'name'}   = $channelname_lc;
+
+	if (not exists($cache->{'server'}->{$servertag_lc}->{'kicknick_last'}))
+	{
+		$cache->{'server'}->{$servertag_lc}->{'kicknick_last'} = 0;
+	}
 
 	$cache->{'server'}->{$servertag_lc}->{'channel'}->{$channelname_lc} = $channel;
 
@@ -817,6 +923,13 @@ sub regex_matched
 		{
 			log_last('kick ' . $client->{'nick'} . '!' . $client->{'host'} . ' [' . $regex->{'reason'} . '] on ' . $channel->{'server'} . '/' . $channel->{'name'});
 			$channelrec->command('^KICK ' . $channel->{'name'} . ' ' . $client->{'nick'} . ' ' . $regex->{'reason'});
+
+			my $server = cache_get_server($channel->{'server'});
+
+			if (defined($server))
+			{
+				cache_server_add_kicknick($server, $client->{'nick'});
+			}
 		}
 	}
 
@@ -863,25 +976,36 @@ sub onload
 		$IRSSI{'name'} . '_match_ignore', $IRSSI{'name'} . ': ignore {channick_hilight $0} {chanhost_hilight $1} {reason $2} ($3)', # nick, host, reason, timeout
 	]);
 
-	Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'},                       '');
-	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_log',               0);
-	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_log_last_size',     42);
-	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore',      1);
-	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore_time', 40);
-	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_join_time',   20);
-	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',        1);
-	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_prune_delay',       60);
+	Irssi::settings_add_str( $IRSSI{'name'}, $IRSSI{'name'},                            '');
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_log',                   0);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_log_last_size',         42);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore',          1);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_ignore_time',     40);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_match_join_time',       20);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_kick',            1);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_userpriv_halfop', 0);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_userpriv_op',     0);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_userpriv_oper',   0);
+	Irssi::settings_add_bool($IRSSI{'name'}, $IRSSI{'name'} . '_match_userpriv_voice',  0);
+	Irssi::settings_add_int( $IRSSI{'name'}, $IRSSI{'name'} . '_prune_delay',           60);
 
-	config_check_init();
+	config_check_init('script loaded');
 
 	Irssi::signal_add(         'setup changed',  'signal_setup_changed');
+	Irssi::signal_add(         'event 401',      'signal_event_401'); # 401: ERR_NOSUCHNICK
+	Irssi::signal_add(         'event 441',      'signal_event_441'); # 441: ERR_USERNOTINCHANNEL
 	Irssi::signal_add_priority('message join',   'signal_message_join_hm100',   Irssi::SIGNAL_PRIORITY_HIGH() - 100);
 	Irssi::signal_add_priority('message public', 'signal_message_public_hm100', Irssi::SIGNAL_PRIORITY_HIGH() - 100);
 
 	Irssi::command_bind('help',             'command_help');
 	Irssi::command_bind(lc($IRSSI{'name'}), 'command_mh_freekicknore', $IRSSI{'name'});
 
-	log_last('script loaded');
+	# we only want this message if log is off (since we already get it in 'log
+	# opened' via config_check_init() above otherwise)
+	if (not Irssi::settings_get_bool($IRSSI{'name'} . '_log'))
+	{
+		log_last('script loaded');
+	}
 
 	return(1);
 }
@@ -895,6 +1019,82 @@ sub onload
 sub signal_setup_changed
 {
 	return(config_check_init());
+}
+
+sub signal_event_401
+{
+	my ($serverrec, $data, $serverhost) = @_;
+
+	# 401: ERR_NOSUCHNICK
+	# "<nickname> :No such nick/channel"
+
+	my $server = cache_get_server(lc($serverrec->{'tag'}));
+
+	if (defined($server))
+	{
+		(undef, my $nickname, undef) = split(/\s/, $data, 3);
+
+		my $kicknick = cache_server_get_kicknick($server, lc($nickname));
+
+		if (defined($kicknick))
+		{
+			log_last('401 "' . $data . '" from ' . $serverrec->{'tag'} . '/' . $serverhost . ' (cached ' . (time() - $kicknick->{'kick'}) . 's)');
+			Irssi::signal_stop();
+		}
+		elsif ((time() - $server->{'kicknick_last'}) < 4)
+		{
+			# this is ircnet specific: if a nickname starts with a digit its a
+			# unique id nick and will (often) not match the nickname we used in
+			# our command, we assume such a nick is actually our client if we
+			# kicked anything within 3 seconds. if we get a regular nick and it
+			# doesnt match the one we kicked, it shouldnt be stopped,
+			if ($nickname =~ m/^[0-9]/)
+			{
+				log_last('401 "' . $data . '" from ' . $serverrec->{'tag'} . '/' . $serverhost . ' (after ' . (time() - $server->{'kicknick_last'}) . 's)');
+				Irssi::signal_stop();
+			}
+		}
+	}
+
+	return(1);
+}
+
+sub signal_event_441
+{
+	my ($serverrec, $data, $serverhost) = @_;
+
+	# 441: ERR_USERNOTINCHANNEL
+	# "<nick> <channel> :They aren't on that channel"
+
+	my $server = cache_get_server(lc($serverrec->{'tag'}));
+
+	if (defined($server))
+	{
+		(undef, my $nickname, undef) = split(/\s/, $data, 3);
+
+		my $kicknick = cache_server_get_kicknick($server, lc($nickname));
+
+		if (defined($kicknick))
+		{
+			log_last('441 "' . $data . '" from ' . $serverrec->{'tag'} . '/' . $serverhost . ' (cached ' . (time() - $kicknick->{'kick'}) . 's)');
+			Irssi::signal_stop();
+		}
+		elsif ((time() - $server->{'kicknick_last'}) < 4)
+		{
+			# this is ircnet specific: if a nickname starts with a digit its a
+			# unique id nick and will (often) not match the nickname we used in
+			# our command, we assume such a nick is actually our client if we
+			# kicked anything within 3 seconds. if we get a regular nick and it
+			# doesnt match the one we kicked, it shouldnt be stopped,
+			if ($nickname =~ m/^[0-9]/)
+			{
+				log_last('441 "' . $data . '" from ' . $serverrec->{'tag'} . '/' . $serverhost . ' (after ' . (time() - $server->{'kicknick_last'}) . 's)');
+				Irssi::signal_stop();
+			}
+		}
+	}
+
+	return(1);
 }
 
 sub signal_message_join_hm100
@@ -997,7 +1197,11 @@ sub signal_message_public_hm100
 		return(1);
 	}
 
-	if ($nickrec->{'op'} or $nickrec->{'voice'} or $nickrec->{'halfop'} or $nickrec->{'serverop'})
+	if (  ($nickrec->{'op'}       and not $channel->{'match_userpriv_op'})
+	   or ($nickrec->{'voice'}    and not $channel->{'match_userpriv_voice'})
+	   or ($nickrec->{'serverop'} and not $channel->{'match_userpriv_oper'})
+	   or ($nickrec->{'halfop'}   and not $channel->{'match_userpriv_halfop'})
+	   )
 	{
 		return(1);
 	}
@@ -1032,6 +1236,8 @@ sub timeout_cache_prune
 	# prune cache of outdated entries and start the next timeout
 	cache_prune();
 	$cache->{'prune_tout'} = Irssi::timeout_add_once(1000 * $config->{'prune_delay'}, 'timeout_cache_prune', undef);
+
+	log_last_prune();
 
 	return(1);
 }
@@ -1214,6 +1420,8 @@ sub command_mh_freekicknore
 	}
 
 	# print lastlog messages
+	log_last_prune();
+
 	Irssi::print(' lastlog:');
 
 	if (@{$log->{'last'}})
